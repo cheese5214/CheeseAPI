@@ -118,6 +118,34 @@ class Scheduler:
 
         return await self._proxy.async_add(fn, interval_time = interval_time, first_run_timer = first_run_timer, expected_run_num = expected_run_num, key = key, args = args, kwargs = kwargs, auto_remove = auto_remove)
 
+    def restart(self, key: str):
+        '''
+        重启任务
+        '''
+
+        self._proxy.restart(key)
+
+    async def async_restart(self, key: str):
+        '''
+        重启任务
+        '''
+
+        await self._proxy.async_restart(key)
+
+    def stop(self, key: str):
+        '''
+        停止任务
+        '''
+
+        self._proxy.stop(key)
+
+    def remove(self, key: str):
+        '''
+        移除任务
+        '''
+
+        self._proxy.remove(key)
+
     @property
     def tasks(self) -> dict[str, Task]:
         return self._proxy._tasks
@@ -139,9 +167,11 @@ class SchedulerProxy:
             self._tasks[task.key] = task
 
             if task.run_type == 'THREAD':
-                task._handler = threading.Thread(target = self.task_processing, args = (task, *args), kwargs = kwargs, daemon = True).start()
+                task._handler = threading.Thread(target = self.task_processing, args = (task, *args), kwargs = kwargs, daemon = True)
             elif task.run_type == 'PROCESS':
-                task._handler = multiprocessing.get_context('spawn').Process(target = self.task_processing, args = (task, *args), kwargs = kwargs, daemon = True).start()
+                task._handler = multiprocessing.get_context('spawn').Process(target = self.task_processing, args = (task, *args), kwargs = kwargs, daemon = True)
+            task._handler.start()
+
             if task.auto_remove:
                 threading.Thread(target = self.join, args = (task,), daemon = True).start()
         else:
@@ -175,7 +205,7 @@ class SchedulerProxy:
             if sleep_time:
                 time.sleep(sleep_time)
 
-            while self.app._proxy.stop_signal.is_set() is False and task._event.is_set() is False:
+            while task._event.is_set() is False:
                 now = time.time()
 
                 try:
@@ -199,7 +229,7 @@ class SchedulerProxy:
         if sleep_time:
             await asyncio.sleep(sleep_time)
 
-        while self.app._proxy.stop_signal.is_set() is False and task._event.is_set() is False:
+        while task._event.is_set() is False:
             now = time.time()
 
             try:
@@ -228,10 +258,6 @@ class SchedulerProxy:
         del self._tasks[task.key]
 
     def restart(self, key: str):
-        '''
-        重启任务
-        '''
-
         task = self._tasks.get(key)
         if task is None:
             raise KeyError(f"Task with key '{key}' does not exist")
@@ -239,15 +265,12 @@ class SchedulerProxy:
         task._event.clear()
         task._run_num = 0
         if task.run_type == 'THREAD':
-            task._handler = threading.Thread(target = self.task_processing, args = (task, *task.args), kwargs = task.kwargs, daemon = True).start()
+            task._handler = threading.Thread(target = self.task_processing, args = (task, *task.args), kwargs = task.kwargs, daemon = True)
         elif task.run_type == 'PROCESS':
-            task._handler = multiprocessing.get_context('spawn').Process(target = self.task_processing, args = (task, *task.args), kwargs = task.kwargs, daemon = True).start()
+            task._handler = multiprocessing.get_context('spawn').Process(target = self.task_processing, args = (task, *task.args), kwargs = task.kwargs, daemon = True)
+        task._handler.start()
 
     async def async_restart(self, key: str):
-        '''
-        重启任务
-        '''
-
         task = self._tasks.get(key)
         if task is None:
             raise KeyError(f"Task with key '{key}' does not exist")
@@ -257,20 +280,12 @@ class SchedulerProxy:
         task._handler = asyncio.create_task(self.async_task_processing(task, *task.args, **task.kwargs))
 
     def stop(self, key: str):
-        '''
-        停止任务
-        '''
-
         if key not in self._tasks:
             return
 
         self._tasks[key]._event.set()
 
     def remove(self, key: str):
-        '''
-        移除任务
-        '''
-
         if key not in self._tasks:
             return
         self._tasks[key]._event.set()

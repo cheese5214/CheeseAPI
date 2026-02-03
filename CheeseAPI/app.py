@@ -1,7 +1,7 @@
-import os, pathlib, multiprocessing, ssl, socket, asyncio, concurrent.futures, multiprocessing.synchronize, inspect
+import os, pathlib, multiprocessing, ssl, socket, asyncio, concurrent.futures, inspect
 from typing import Type, Literal, Callable, AsyncIterable, TYPE_CHECKING
 
-import redis
+import redis, signal
 from CheeseLog import CheeseLogger, Message
 
 from CheeseAPI.printer import Printer
@@ -20,12 +20,11 @@ if TYPE_CHECKING:
     from CheeseAPI.route import Pattern
 
 class AppProxy:
-    __slots__ = ('app', 'stop_signal', 'ssl_context', 'server_socket')
+    __slots__ = ('app', 'ssl_context', 'server_socket')
 
     def __init__(self, app: 'CheeseAPI'):
         self.app: CheeseAPI = app
 
-        self.stop_signal: multiprocessing.synchronize.Event | None = None
         self.ssl_context: ssl.SSLContext | None = None
         self.server_socket: socket.socket | None = None
 
@@ -33,11 +32,11 @@ class AppProxy:
         waiting_list = []
 
         try:
+            self.app.logger.start()
             self.app.printer.app_start()
 
             self.load_modules()
 
-            self.stop_signal = multiprocessing.Event()
             self.app._is_running = True
 
             self.app.signal.before_server_start.send()
@@ -60,9 +59,6 @@ class AppProxy:
         self.before_app_stop()
         self.app.signal.before_app_stop.send()
 
-        if self.stop_signal:
-            self.stop_signal.set()
-
         if waiting_list:
             try:
                 for item in waiting_list:
@@ -74,6 +70,7 @@ class AppProxy:
         self.app._is_running = False
 
         self.app.printer.app_stop()
+        self.app.logger.stop()
 
         self.after_app_stop()
         self.app.signal.after_app_stop.send()
@@ -223,13 +220,16 @@ class AppProxy:
             })
 
             asyncio.run(self.async_worker_running(is_first))
+        except (KeyboardInterrupt, SystemExit):
+            ...
+        except Exception as e:
+            self.app.printer.app_error(e)
 
+        try:
             self.after_worker_stop(is_first)
             self.app.signal.after_worker_stop.send(kwargs = {
                 'is_first': is_first
             })
-        except (KeyboardInterrupt, SystemExit):
-            ...
         except Exception as e:
             self.app.printer.app_error(e)
 
@@ -251,16 +251,19 @@ class AppProxy:
                 'is_first': is_first
             })
 
-            while self.stop_signal.is_set() is False:
+            while True:
                 client_socket, addr = await loop.sock_accept(self.server_socket)
                 loop.create_task(self.client_socket_process(client_socket, addr))
+        except asyncio.CancelledError:
+            ...
+        except Exception as e:
+            self.app.printer.app_error(e)
 
+        try:
             await self.before_worker_stop(is_first)
             await self.app.signal.before_worker_stop.async_send(kwargs = {
                 'is_first': is_first
             })
-        except (KeyboardInterrupt, SystemExit):
-            ...
         except Exception as e:
             self.app.printer.app_error(e)
 
@@ -324,7 +327,7 @@ class AppProxy:
     async def get_request(self, client_socket: socket.socket, addr: tuple[str, int]) -> AsyncIterable[tuple[Request, Response | None]]:
         keep_alive_max_requests = 0
         request = None
-        while self.stop_signal.is_set() is False and keep_alive_max_requests < self.app.keep_alive_max_requests and client_socket._closed is False:
+        while keep_alive_max_requests < self.app.keep_alive_max_requests and client_socket._closed is False:
             if request:
                 keep_alive_max_requests += 1
 
@@ -523,7 +526,7 @@ class CheeseAPI:
         self._signal: Signal = Signal(self)
         self._route: AppRoute = AppRoute(self)
         self._cors: CORS = CORS(cors_allow_origins, cors_allow_methods, cors_allow_headers, cors_allow_credentials, cors_expose_headers, cors_max_age)
-        self._scheduler: 'Scheduler' = Scheduler(self)
+        self._scheduler: Scheduler = Scheduler(self)
 
         self.route.patterns.extend(route_patterns)
         self.route.patterns.sort(key = lambda x: x['weight'], reverse = True)
@@ -543,8 +546,7 @@ class CheeseAPI:
         self._proxy.start()
 
     def stop(self):
-        if self._proxy.stop_signal:
-            self._proxy.stop_signal.set()
+        os.killpg(os.getpgid(os.getpid()), signal.SIGINT)
 
     @property
     def host(self) -> str:

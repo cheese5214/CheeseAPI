@@ -238,7 +238,7 @@ class WebsocketProxy:
                 WebsocketProxy.sync_server = {}
             if self.websocket.request.path not in WebsocketProxy.sync_server:
                 WebsocketProxy.sync_server[self.websocket.request.path] = redis.asyncio.Redis.from_url(self.app.sync_server_url)
-            asyncio.create_task(self.sync_server_running())
+                asyncio.create_task(self.sync_server_running())
 
         loop = asyncio.get_running_loop()
         self.reader = asyncio.StreamReader()
@@ -284,10 +284,10 @@ class WebsocketProxy:
                             asyncio.create_task(connector.close())
 
     async def message(self):
-        while self.app._proxy.stop_signal.is_set() is False:
+        while True:
             opcode, data = await self.decode()
             if opcode is None:
-                continue
+                break
 
             if opcode == 0x1:
                 try:
@@ -308,6 +308,7 @@ class WebsocketProxy:
 
     async def disconnect(self):
         self.websocket._is_running = False
+        Websocket.connectors[self.websocket.request.path].remove(self.websocket)
         self.app.printer.websocket_disconnect(self.websocket)
         await self.websocket.on_disconnect()
         if self.writer:
@@ -334,14 +335,11 @@ class WebsocketProxy:
         full_payload = b''
         opcode = None
         try:
-            while self.app._proxy.stop_signal.is_set() is False:
-                if len(full_payload) == 0:
-                    try:
-                        header = await asyncio.wait_for(self.reader.readexactly(2), 0.1)
-                    except asyncio.TimeoutError:
-                        return None, None
-                else:
+            while True:
+                try:
                     header = await asyncio.wait_for(self.reader.readexactly(2), self.app.request_timeout)
+                except asyncio.exceptions.IncompleteReadError:
+                    return opcode, full_payload
 
                 fin = bool(header[0] & 0x80)
                 if opcode is None:
