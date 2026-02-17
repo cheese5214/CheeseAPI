@@ -29,6 +29,8 @@ class AppProxy:
         self.server_socket: socket.socket | None = None
 
     def start(self):
+        signal.signal(signal.SIGTERM, lambda signum, frame: self.app.stop())
+
         waiting_list = []
 
         try:
