@@ -26,31 +26,31 @@ def validator(*, json_model: pydantic.BaseModel | None = None, form_model: pydan
 
                 json_data = None
                 if json_model is not None:
-                    json_data = json_model.model_validate(request.json, by_alias = True)
+                    json_data = json_model.model_validate(request.json or {}, by_alias = True)
                 if kwargs.get('json_data') is None:
                     kwargs['json_data'] = json_data
 
                 form_data = None
                 if form_model is not None:
-                    form_data = form_model.model_validate(request.form, by_alias = True)
+                    form_data = form_model.model_validate(request.form or {}, by_alias = True)
                 if kwargs.get('form_data') is None:
                     kwargs['form_data'] = form_data
 
                 params_data = None
                 if params_model is not None:
-                    params_data = params_model.model_validate(request.params, by_alias = True)
+                    params_data = params_model.model_validate(request.params or {}, by_alias = True)
                 if kwargs.get('params_data') is None:
                     kwargs['params_data'] = params_data
 
                 headers_data = None
                 if headers_model is not None:
-                    headers_data = headers_model.model_validate(request.headers, by_alias = True)
+                    headers_data = headers_model.model_validate(request.headers or {}, by_alias = True)
                 if kwargs.get('headers_data') is None:
                     kwargs['headers_data'] = headers_data
 
                 query_data = None
                 if query_model is not None:
-                    query_data = query_model.model_validate(request.query, by_alias = True)
+                    query_data = query_model.model_validate(request.query or {}, by_alias = True)
                 if kwargs.get('query_data') is None:
                     kwargs['query_data'] = query_data
             except Exception as e:
