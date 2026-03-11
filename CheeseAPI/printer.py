@@ -45,28 +45,28 @@ class Printer:
 
     def fn_error(self, e: Exception, request: 'Request'):
         error = traceback.format_exc()[:-1].replace("\n", "\n    ")
-        self.app.logger.danger(f'An error occurred causing the {request.ip} visited {request.method} {request.path}:\n    {error}', f'An error occurred causing the <cyan>{request.ip}</cyan> visited <cyan>{request.method} {request.path}</cyan>:\n    {self.app.logger.encode(error)}')
+        self.app.logger.danger(f'An error occurred causing the {request.ip} visited {request.method} {request.full_path}:\n    {error}', f'An error occurred causing the <cyan>{request.ip}</cyan> visited <cyan>{request.method} {request.full_path}</cyan>:\n    {self.app.logger.encode(error)}')
 
     def websocket_error(self, e: Exception, websocket: 'Websocket'):
         error = traceback.format_exc()[:-1].replace("\n", "\n    ")
-        self.app.logger.danger(f'An error occurred causing the {websocket.request.ip} disconnected :\n    {error}', f'An error occurred causing the <cyan>{websocket.request.ip}</cyan> disconnected <cyan>{websocket.request.method} {websocket.request.path}</cyan>:\n    {self.app.logger.encode(error)}')
+        self.app.logger.danger(f'An error occurred causing the {websocket.request.ip} disconnected  {websocket.request.method} {websocket.request.full_path}:\n    {error}', f'An error occurred causing the <cyan>{websocket.request.ip}</cyan> disconnected <cyan>{websocket.request.method} {websocket.request.full_path}</cyan>:\n    {self.app.logger.encode(error)}')
 
     def response(self, request: 'Request', response: 'Response'):
         status_color = HTTP_STATUS_COLOR[int(response.status / 100) - 1]
         if request.path is not None:
-            self.app.logger.print('HTTP', f'The {request.ip} visited {request.method} {request.path} and returned {response.status}', f'The <cyan>{request.ip}</cyan> visited <cyan>{request.method} {request.path}</cyan> returned <{status_color}>{response.status}</{status_color}>')
+            self.app.logger.print('HTTP', f'The {request.ip} visited {request.method} {request.full_path} and returned {response.status}', f'The <cyan>{request.ip}</cyan> visited <cyan>{request.method} {request.full_path}</cyan> returned <{status_color}>{response.status}</{status_color}>')
         else:
             self.app.logger.print('HTTP', f'The request from {request.ip} failed to parse and returned {response.status}', f'The request from <cyan>{request.ip}</cyan> failed to parse and returned <{status_color}>{response.status}</{status_color}>')
 
     def websocket_connect(self, websocket: 'Websocket'):
-        self.app.logger.print('WEBSOCKET', f'The {websocket.request.ip} connected {websocket.request.method} {websocket.request.path}', f'The <cyan>{websocket.request.ip}</cyan> connected <cyan>{websocket.request.method} {websocket.request.path}</cyan>')
+        self.app.logger.print('WEBSOCKET', f'The {websocket.request.ip} connected {websocket.request.method} {websocket.request.full_path}', f'The <cyan>{websocket.request.ip}</cyan> connected <cyan>{websocket.request.method} {websocket.request.full_path}</cyan>')
 
     def websocket_disconnect(self, websocket: 'Websocket'):
-        self.app.logger.print('WEBSOCKET', f'The {websocket.request.ip} disconnected {websocket.request.method} {websocket.request.path}', f'The <cyan>{websocket.request.ip}</cyan> disconnected <cyan>{websocket.request.method} {websocket.request.path}</cyan>')
+        self.app.logger.print('WEBSOCKET', f'The {websocket.request.ip} disconnected {websocket.request.method} {websocket.request.full_path}', f'The <cyan>{websocket.request.ip}</cyan> disconnected <cyan>{websocket.request.method} {websocket.request.full_path}</cyan>')
 
     def websocket_message_error(self, e: Exception, websocket: 'Websocket'):
         error = traceback.format_exc()[:-1].replace("\n", "\n    ")
-        self.app.logger.danger(f'An error occurred causing the {websocket.request.ip} received a message to {websocket.request.method} {websocket.request.path}:\n    {error}', f'An error occurred causing the <cyan>{websocket.request.ip}</cyan> receive a message to <cyan>{websocket.request.method} {websocket.request.path}</cyan>:\n    {self.app.logger.encode(error)}')
+        self.app.logger.danger(f'An error occurred causing the {websocket.request.ip} received a message to {websocket.request.method} {websocket.request.full_path}:\n    {error}', f'An error occurred causing the <cyan>{websocket.request.ip}</cyan> receive a message to <cyan>{websocket.request.method} {websocket.request.full_path}</cyan>:\n    {self.app.logger.encode(error)}')
 
     def scheduler_error(self, e: Exception, task: 'Task'):
         error = traceback.format_exc()[:-1].replace("\n", "\n    ")
