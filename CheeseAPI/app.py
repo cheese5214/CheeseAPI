@@ -98,7 +98,7 @@ class AppProxy:
                 'modules': module
             })
 
-            for path in pathlib.Path(module).glob('*.py'):
+            for path in pathlib.Path(module.replace('.', '/')).glob('*.py'):
                 __import__(f'{module}.{path.stem}')
 
             self.after_load_module(i, module)
@@ -463,7 +463,7 @@ class CheeseAPI:
             - compress: 支持的压缩算法，按照顺序尝试压缩
             - compress_min_length: 启用压缩的最小响应体长度
             - compress_level: 压缩等级，每个算法的压缩级别可能不同，详见各算法文档
-            - manual_modules: 手动加载的模块列表
+            - manual_modules: 手动加载的模块列表；若想要加载多层级模块，请使用点号分隔，如 `Xxx.module`，与导入模块的方式一致
             - exclude_modules: 排除加载的模块列表
             - priority_modules: 优先加载的模块列表
             - sync_server_data_encode: 同步服务器数据编码处理函数

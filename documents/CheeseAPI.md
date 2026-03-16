@@ -68,7 +68,7 @@ app = CheeseAPI()
 
     - **manual_modules**
 
-        手动加载的模块列表
+        手动加载的模块列表；若想要加载多层级模块，请使用点号分隔，如 `Xxx.module`，与导入模块的方式一致
 
     - **exclude_modules**
 
@@ -190,7 +190,7 @@ SSL 密钥路径
 
 ## **`self.manual_modules: list[str]`**
 
-手动加载的模块列表
+手动加载的模块列表；若想要加载多层级模块，请使用点号分隔，如 `Xxx.module`，与导入模块的方式一致
 
 ## **`self.exclude_modules: list[str]`**
 
