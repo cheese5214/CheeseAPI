@@ -158,6 +158,14 @@ class SchedulerProxy:
 
         self._tasks: dict[str, Task] = {}
 
+    def __getstate__(self):
+        return {
+            'app': self.app
+        }
+
+    def __setstate__(self, state):
+        self.app = state['app']
+
     def add(self, fn: Callable | None = None, *, interval_time: float | None = None, first_run_timer: datetime.datetime | None = None, expected_run_num: int | None = None, key: str | None = None, run_type: Literal['THREAD', 'PROCESS'] = 'THREAD', args: tuple = (), kwargs: dict = {}, auto_remove: bool = False):
         if fn is not None:
             task = Task(fn, interval_time = interval_time, first_run_timer = first_run_timer, expected_run_num = expected_run_num, key = key, run_type = run_type, args = args, kwargs = kwargs, auto_remove = auto_remove)
