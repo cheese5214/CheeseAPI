@@ -1,6 +1,8 @@
 import re, uuid
 from typing import Literal, TypedDict, Callable, TYPE_CHECKING, AsyncIterable, Union
 
+from urllib.parse import unquote
+
 from CheeseAPI.cors import CORS
 
 if TYPE_CHECKING:
@@ -252,7 +254,7 @@ class RouteProxy:
                     i = 1
                     for key, type in self.app.route._proxy.dynamic_routes[_path][method]['params'].items():
                         value = match.group(i)
-                        _params[key] = type(value)
+                        _params[key] = type(unquote(value))
                         i += 1
                     return self.app.route._proxy.dynamic_routes[_path][method], _params
                 else:
