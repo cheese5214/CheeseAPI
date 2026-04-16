@@ -75,6 +75,10 @@ HTTP_STATUS = {
 }
 NO_BODY_STATUS = (100, 101, 102, 204, 304)
 PREVIEWABLE_TYPES = ('text/plain', 'text/html', 'text/css', 'text/javascript', 'application/json', 'application/xml', 'text/xml', 'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/svg+xml', 'image/webp', 'image/bmp', 'video/mp4', 'video/webm', 'video/ogg', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm', 'application/pdf')
+MERGE_TYPES = {
+    'audio/x-wav': 'audio/wav',
+    'audio/vnd.wave': 'audio/wav'
+}
 
 class Cookie(TypedDict):
     value: str
@@ -227,6 +231,8 @@ class ResponseProxy:
 
             if 'Content-Type' not in headers and 'Content-Disposition' not in headers:
                 mime_type = mimetypes.guess_type(self.response.file.name)[0] or 'application/octet-stream'
+                if mime_type in MERGE_TYPES:
+                    mime_type = MERGE_TYPES[mime_type]
                 headers['Content-Type'] = f'{mime_type}; charset=utf-8'
                 headers['Content-Disposition'] = f'{"inline" if self.response.preview and mime_type in PREVIEWABLE_TYPES else "attachment"}; filename="{self.response.file.name}"'
 
