@@ -87,7 +87,7 @@ class Cookie(TypedDict):
 class Response:
     __slots__ = ('status', '_proxy', 'body', 'headers', 'cookies', 'high_precision_date', 'compress', 'compress_level')
 
-    def __init__(self, body: dict | list | str | bytes | AsyncIterable | None = None, status: int = 200, headers: dict[str, str] = {}, *, high_precision_date: bool = False, compress: Literal['gzip', 'deflate', 'br', 'zstd'] | None = None, compress_level: int | None = None):
+    def __init__(self, body: dict | list | str | bytes | AsyncIterable | None = None, status: int = 200, headers: dict[str, str] | None = None, *, high_precision_date: bool = False, compress: Literal['gzip', 'deflate', 'br', 'zstd'] | None = None, compress_level: int | None = None):
         '''
         - Args
             - body: 当为 `AsyncIterable` 时，自动使用 chunked 传输编码
@@ -99,7 +99,7 @@ class Response:
 
         self.status: int = status
         self.body: dict | list | str | bytes | AsyncIterable | None = body
-        self.headers: dict[str, str] = headers
+        self.headers: dict[str, str] = headers if headers is not None else {}
         self.cookies: dict[str, Cookie] = {}
         self.high_precision_date: bool = high_precision_date
         self.compress: Literal['gzip', 'deflate', 'br', 'zstd'] | None = compress
@@ -118,7 +118,9 @@ class Response:
         }
 
 class RedirectResponse(Response):
-    def __init__(self, location: str, status: Literal[301, 302, 303, 307, 308] = 302, headers: dict[str, str] = {}, body: bytes | str | list | dict | None = None):
+    def __init__(self, location: str, status: Literal[301, 302, 303, 307, 308] = 302, headers: dict[str, str] | None = None, body: bytes | str | list | dict | None = None):
+        if headers is None:
+            headers = {}
         headers['Location'] = location
 
         super().__init__(status, body, headers)
@@ -126,7 +128,7 @@ class RedirectResponse(Response):
 class FileResponse(Response):
     __slots__ = ('file', 'preview', 'transmission_type', 'chunked_size')
 
-    def __init__(self, file_path_or_file: str | File, *, status: int = 200, headers: dict[str, str] = {}, preview: bool = True, transmission_type: Literal['CONTENT_LENGTH', 'CHUNKED'] = 'CONTENT_LENGTH', chunked_size: int | None = None, compress: Literal['gzip', 'deflate', 'br', 'zstd'] | None = None, compress_level: int | None = None):
+    def __init__(self, file_path_or_file: str | File, *, status: int = 200, headers: dict[str, str] | None = None , preview: bool = True, transmission_type: Literal['CONTENT_LENGTH', 'CHUNKED'] = 'CONTENT_LENGTH', chunked_size: int | None = None, compress: Literal['gzip', 'deflate', 'br', 'zstd'] | None = None, compress_level: int | None = None):
         '''
         - Args
             - preview: 优先预览文件
