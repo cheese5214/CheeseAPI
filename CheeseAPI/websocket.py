@@ -1,9 +1,10 @@
 import base64, hashlib, asyncio, ssl, struct, json
 from functools import partial
-from typing import TYPE_CHECKING, AsyncIterable, Self, Callable
+from typing import TYPE_CHECKING, AsyncIterable, Self
 
 import redis
 
+from CheeseAPI import static
 from CheeseAPI.response import Response
 
 if TYPE_CHECKING:
@@ -108,22 +109,17 @@ class Websocket:
     close = DualMethod(_static_close, _instance_close)
 
 class WebsocketProxy:
-    sync_server: dict[str, redis.asyncio.Redis] | None = None
-    sync_servers: tuple[redis.Redis, redis.asyncio.Redis] | None = None
-    data_encode: Callable | None = None
-    data_decode: Callable | None = None
-
     @staticmethod
     def _static_send(path: str, data: bytes | list | str | dict, *, websocket_key_or_keys: str | list[str] | None = None):
-        if WebsocketProxy.sync_servers is not None:
+        if static.websocket_sync_servers is not None:
             data = json.dumps({
                 'data': data,
                 'key': websocket_key_or_keys,
                 'event': 'send'
             }).encode()
-            if WebsocketProxy.data_encode is not None:
-                data = WebsocketProxy.data_encode(data)
-            WebsocketProxy.sync_servers[0].publish(path, data)
+            if static.websocket_data_encode is not None:
+                data = static.websocket_data_encode(data)
+            static.websocket_sync_servers[0].publish(path, data)
         elif path in Websocket.connectors:
             if websocket_key_or_keys is None:
                 for connector in Websocket.connectors[path]:
@@ -140,15 +136,15 @@ class WebsocketProxy:
 
     @staticmethod
     async def async_send(path: str, data: bytes | list | str | dict, *, websocket_key_or_keys: str | list[str] | None = None):
-        if WebsocketProxy.sync_servers is not None:
+        if static.websocket_sync_servers is not None:
             data = json.dumps({
                 'data': data,
                 'key': websocket_key_or_keys,
                 'event': 'send'
             }).encode()
-            if WebsocketProxy.data_encode is not None:
-                data = WebsocketProxy.data_encode(data)
-            await WebsocketProxy.sync_servers[1].publish(path, data)
+            if static.websocket_data_encode is not None:
+                data = static.websocket_data_encode(data)
+            await static.websocket_sync_servers[1].publish(path, data)
         elif path in Websocket.connectors:
             if websocket_key_or_keys is None:
                 tasks = [connector.send(data) for connector in Websocket.connectors[path]]
@@ -160,14 +156,14 @@ class WebsocketProxy:
 
     @staticmethod
     def _static_close(path: str, code: int = 1000, message: str = '', *, websocket_key_or_keys: str | list[str] | None = None):
-        if WebsocketProxy.sync_servers is not None:
+        if static.websocket_sync_servers is not None:
             data = json.dumps({
                 'key': websocket_key_or_keys,
                 'event': 'close'
             }).encode()
-            if WebsocketProxy.data_encode is not None:
-                data = WebsocketProxy.data_encode(data)
-            WebsocketProxy.sync_servers[0].publish(path, data)
+            if static.websocket_data_encode is not None:
+                data = static.websocket_data_encode(data)
+            static.websocket_sync_servers[0].publish(path, data)
         elif path in Websocket.connectors:
             if websocket_key_or_keys is None:
                 for connector in Websocket.connectors[path]:
@@ -184,14 +180,14 @@ class WebsocketProxy:
 
     @staticmethod
     async def async_close(path: str, code: int = 1000, message: str = '', *, websocket_key_or_keys: str | list[str] | None = None):
-        if WebsocketProxy.sync_servers is not None:
+        if static.websocket_sync_servers is not None:
             data = json.dumps({
                 'key': websocket_key_or_keys,
                 'event': 'close'
             }).encode()
-            if WebsocketProxy.data_encode is not None:
-                data = WebsocketProxy.data_encode(data)
-            await WebsocketProxy.sync_servers[1].publish(path, data)
+            if static.websocket_data_encode is not None:
+                data = static.websocket_data_encode(data)
+            await static.websocket_sync_servers[1].publish(path, data)
         elif path in Websocket.connectors:
             if websocket_key_or_keys is None:
                 tasks = [connector.close(code, message) for connector in Websocket.connectors[path]]
@@ -233,12 +229,9 @@ class WebsocketProxy:
 
     async def connect(self) -> AsyncIterable[Response]:
         Websocket.connectors.setdefault(self.websocket.request.path, []).append(self.websocket)
-        if self.app.sync_server_url:
-            if WebsocketProxy.sync_server is None:
-                WebsocketProxy.sync_server = {}
-            if self.websocket.request.path not in WebsocketProxy.sync_server:
-                WebsocketProxy.sync_server[self.websocket.request.path] = redis.asyncio.Redis.from_url(self.app.sync_server_url)
-                asyncio.create_task(self.sync_server_running())
+        if self.app.sync_server_url and self.websocket.request.path not in static.websocket_sync_server:
+            static.websocket_sync_server[self.websocket.request.path] = redis.asyncio.Redis.from_url(self.app.sync_server_url)
+            asyncio.create_task(self.sync_server_running())
 
         loop = asyncio.get_running_loop()
         self.reader = asyncio.StreamReader()
@@ -254,7 +247,7 @@ class WebsocketProxy:
 
     async def sync_server_running(self):
         if self.app.sync_server_url.startswith('redis'):
-            pubsub = WebsocketProxy.sync_server[self.websocket.request.path].pubsub()
+            pubsub = static.websocket_sync_server[self.websocket.request.path].pubsub()
             await pubsub.subscribe(self.websocket.request.path)
             async for message in pubsub.listen():
                 if message['type'] != 'message':
@@ -265,8 +258,8 @@ class WebsocketProxy:
                     continue
 
                 message = message['data']
-                if WebsocketProxy.data_decode is not None:
-                    message = WebsocketProxy.data_decode(message)
+                if static.websocket_data_decode is not None:
+                    message = static.websocket_data_decode(message)
                 message = json.loads(message.decode())
                 if isinstance(message['key'], list):
                     connectors = [connector for connector in connectors if connector.key in message['key']]

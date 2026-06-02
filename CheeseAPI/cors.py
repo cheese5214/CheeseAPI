@@ -5,7 +5,7 @@ from CheeseAPI.response import Response
 if TYPE_CHECKING:
     from CheeseAPI.request import Request
 
-HTTP_METHOD_TYPE = Literal['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH']
+HTTP_METHOD_TYPE = Literal['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'CONNECT']
 
 class CORS:
     __slots__ = ('allow_origins', 'allow_methods', 'allow_headers', 'allow_credentials', 'expose_headers', 'max_age')

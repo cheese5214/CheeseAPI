@@ -141,22 +141,6 @@ class Signal:
     @property
     def after_request(self) -> CheeseSignal:
         '''
-        绑定协程函数`async def func(*, request: Request)`
-        '''
-
-        return self._after_request
-
-    @property
-    def before_request(self) -> CheeseSignal:
-        '''
-        绑定协程函数`async def func(*, client_socket: socket.socket, addr: tuple[str, int])`
-        '''
-
-        return self._before_request
-
-    @property
-    def after_request(self) -> CheeseSignal:
-        '''
         绑定协程函数`async def func(*, request: Request | None)`
         '''
 

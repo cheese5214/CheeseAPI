@@ -59,6 +59,10 @@ class DefaultWebsocket(Websocket):
 
 ## **`async def on_pong(self)`**
 
+## **`async def ping(self)`**
+
+## **`async def pong(self)`**
+
 ## **`async def send(self, data: bytes | list | str | dict)`**
 
 ## **`async def close(self, code: int = 1000, message: str = '')`**

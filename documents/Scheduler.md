@@ -100,6 +100,30 @@ if __name__ == '__main__':
 
 移除任务
 
+### **`async def async_stop(self, key: str)`**
+
+停止任务
+
+### **`async def async_remove(self, key: str)`**
+
+移除任务
+
+### **`def get_tasks(self) -> dict[str, Task]`**
+
+获取所有任务
+
+### **`async def async_get_tasks(self) -> dict[str, Task]`**
+
+获取所有任务
+
+### **`def get_task(self, key: str) -> Task | None`**
+
+获取任务
+
+### **`async def async_get_task(self, key: str) -> Task | None`**
+
+获取任务
+
 ## **`class Task`**
 
 在 `is_active` 为 `False` 时，修改任务属性是可行的，在下一次运行时会生效

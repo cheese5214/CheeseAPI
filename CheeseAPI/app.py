@@ -1,9 +1,10 @@
-import os, pathlib, multiprocessing, ssl, socket, asyncio, concurrent.futures, inspect
+import os, pathlib, multiprocessing, ssl, socket, asyncio, concurrent.futures, inspect, importlib.util
 from typing import Type, Literal, Callable, AsyncIterable, TYPE_CHECKING
 
-import redis, signal
+import signal, redis
 from CheeseLog import CheeseLogger, Message
 
+from CheeseAPI import static
 from CheeseAPI.printer import Printer
 from CheeseAPI.signal import Signal
 from CheeseAPI.request import RequestProxy
@@ -30,6 +31,8 @@ class AppProxy:
 
     def start(self):
         signal.signal(signal.SIGTERM, lambda signum, frame: self.app.stop())
+
+        self._process_init()
 
         waiting_list = []
 
@@ -98,7 +101,31 @@ class AppProxy:
                 'modules': module
             })
 
-            for path in pathlib.Path(module.replace('.', '/')).glob('*.py'):
+            try:
+                spec = importlib.util.find_spec(module)
+            except (ImportError, ValueError, AttributeError):
+                continue
+
+            if spec is None:
+                continue
+
+            p = None
+            if spec.origin is None and spec.submodule_search_locations:
+                for location in spec.submodule_search_locations:
+                    p = pathlib.Path(location)
+                    if p.exists():
+                        break
+                if not p:
+                    continue
+
+            if spec.origin is None:
+                continue
+
+            origin = pathlib.Path(spec.origin)
+            if origin.name == '__init__.py':
+                origin = origin.parent
+
+            for path in origin.glob('*.py'):
                 __import__(f'{module}.{path.stem}')
 
             self.after_load_module(i, module)
@@ -239,14 +266,6 @@ class AppProxy:
         try:
             loop = asyncio.get_event_loop()
             loop.set_default_executor(concurrent.futures.ThreadPoolExecutor())
-
-            if self.app.sync_server_url:
-                if WebsocketProxy.sync_servers is None:
-                    WebsocketProxy.sync_servers = (redis.Redis.from_url(self.app.sync_server_url), redis.asyncio.Redis.from_url(self.app.sync_server_url))
-                if WebsocketProxy.data_encode is None:
-                    WebsocketProxy.data_encode = self.app.sync_server_data_encode
-                if WebsocketProxy.data_decode is None:
-                    WebsocketProxy.data_decode = self.app.sync_server_data_decode
 
             await self.after_worker_start(is_first)
             await self.app.signal.after_worker_start.async_send(kwargs = {
@@ -443,6 +462,17 @@ class AppProxy:
     async def after_response(self, response: Response):
         ...
 
+    def _process_init(self, app: 'CheeseAPI' = None):
+        if not app:
+            app = self.app
+
+        static.websocket_data_decode = app.sync_server_data_decode
+        static.websocket_data_encode = app.sync_server_data_encode
+        if app.sync_server_url:
+            static.websocket_sync_servers = (redis.Redis.from_url(app.sync_server_url), redis.asyncio.Redis.from_url(app.sync_server_url))
+            static.websocket_sync_server = {}
+        app.scheduler._proxy.start(app)
+
 class CheeseAPI:
     __slots__ = ('_host', '_port', '_ipv6', '_logger_path', '_dual_stack', '_socket_backlog', '_socket_send_buffer_size', '_socket_receive_buffer_size', '_workers', '_ssl_cert', '_ssl_key', '_sync_server_url', '_static_path', '_printer', '_compress', '_compress_min_length', '_compress_level', '_manual_modules', '_exclude_modules', '_priority_modules', '_sync_server_data_encode', '_sync_server_data_decode', '_logger_messages', '_logger', '_is_running', '_request_timeout', '_keep_alive', '_keep_alive_timeout', '_keep_alive_max_requests', '_AppProxy_Class', '_RequestProxy_Class', '_proxy', '_signal', '_ResponseProxy_Class', '_RouteProxy_Class', '_route', '_WebsocketProxy_Class', '_cors', '_SchedulerProxy_Class', '_scheduler')
 
@@ -533,16 +563,10 @@ class CheeseAPI:
         self.route.patterns.extend(route_patterns)
         self.route.patterns.sort(key = lambda x: x['weight'], reverse = True)
 
-    def __setstate__(self, state: tuple[None, dict[str, any]]):
-        for key, value in state[1].items():
+    def __setstate__(self, data: tuple[None, dict[str, any]]):
+        for key, value in data[1].items():
             setattr(self, key, value)
-
-        if self.sync_server_url and WebsocketProxy.sync_servers is None:
-            WebsocketProxy.sync_servers = (redis.Redis.from_url(self.sync_server_url), redis.asyncio.Redis.from_url(self.sync_server_url))
-        if WebsocketProxy.data_encode is None:
-            WebsocketProxy.data_encode = self.sync_server_data_encode
-        if WebsocketProxy.data_decode is None:
-            WebsocketProxy.data_decode = self.sync_server_data_decode
+        self._proxy._process_init(self)
 
     def start(self):
         self._proxy.start()

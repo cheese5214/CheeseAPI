@@ -53,7 +53,7 @@ def validator(*, json_model: pydantic.BaseModel | None = None, form_model: pydan
                     query_data = query_model.model_validate(request.query or {}, by_alias = True)
                 if kwargs.get('query_data') is None:
                     kwargs['query_data'] = query_data
-            except Exception as e:
+            except pydantic.ValidationError as e:
                 if hide_body:
                     return Response(status = 400)
                 else:

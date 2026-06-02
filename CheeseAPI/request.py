@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 HTTP_METHOD_TYPE = Literal['CONNECT', 'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT', 'TRACE', 'WEBSOCKET']
 
 class Request:
-    __slots__ = ('_proxy', '_ip', '_method', '_path', '_params', '_headers', '_query', '_body', '_json', '_form', '_files', '_cookies', '_full_path', '_ranges', '_fn')
+    __slots__ = ('_proxy', '_ip', '_method', '_path', '_params', '_headers', '_query', '_body', '_json', '_form', '_files', '_cookies', '_full_path', '_ranges', '_fn', '_file')
 
     def __init__(self, app: 'CheeseAPI', client_socket: socket.socket, addr: tuple[str, int]):
         self._proxy: RequestProxy = app.RequestProxy_Class(app, self, client_socket)
@@ -26,6 +26,7 @@ class Request:
         self._json: dict | list | None = None
         self._form: dict[str, str] | None = None
         self._files: dict[str, File] | None = None
+        self._file: File | None = None
         self._cookies: dict[str, str] | None = None
         self._full_path: str | None = None
         self._ranges: list[tuple[int, int | None]] | None = None
@@ -92,6 +93,10 @@ class Request:
     @property
     def files(self) -> dict[str, bytes] | None:
         return self._files
+
+    @property
+    def file(self) -> File | None:
+        return self._file
 
     @property
     def cookies(self) -> dict[str, str] | None:
@@ -183,6 +188,7 @@ class RequestProxy:
                 data = None
                 try:
                     data = await asyncio.wait_for(loop.sock_recv(self.client_socket, self.app.socket_receive_buffer_size), self.app.request_timeout)
+                    self.request._body += data
                 except asyncio.TimeoutError:
                     raise
                 if not data:

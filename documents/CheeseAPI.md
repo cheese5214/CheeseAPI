@@ -265,3 +265,11 @@ SSL 密钥路径
 ## **`self.SchedulerProxy_Class: Type[SchedulerProxy]`**
 
 若想要对定时任务处理逻辑进行处理，可传入自定义的 SchedulerProxy 类
+
+## **`def start(self)`**
+
+启动服务器
+
+## **`def stop(self)`**
+
+停止服务器

@@ -40,6 +40,14 @@ async def test(*, request: Request):
 
 ## **`self.ranges: list[tuple[int, int | None]]`**
 
+## **`self.files: dict[str, File]`**
+
+上传的文件字典，key 为表单字段名，value 为 `File` 对象
+
+## **`self.file: File | None`**
+
+单文件上传对象
+
 ## **`async def recv_body(self, get_all: bool = False) -> bool | Response`**
 
 若在路由中设置了 `auto_recv_body = False`，则需要手动调用此方法接收请求体
