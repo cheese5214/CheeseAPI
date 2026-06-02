@@ -1,7 +1,7 @@
 import datetime, uuid, threading, multiprocessing, asyncio, time, json
 from typing import Callable, Literal, TYPE_CHECKING
 
-import redis
+import redis, redis.exceptions
 
 from CheeseAPI import static
 
@@ -248,17 +248,22 @@ class SchedulerProxy:
             app = self.app
 
         if app.sync_server_url:
-            static.scheduler_sync_servers = (redis.Redis.from_url(app.sync_server_url), redis.asyncio.Redis.from_url(app.sync_server_url))
+            static.scheduler_sync_servers = (redis.ConnectionPool.from_url(app.sync_server_url), redis.asyncio.ConnectionPool.from_url(app.sync_server_url))
             threading.Thread(target = self._start_pubsub, args = (app,), daemon = True).start()
 
     def _start_pubsub(self, app: 'CheeseAPI'):
-        pubsub = redis.Redis.from_url(app.sync_server_url).pubsub()
+        pubsub = redis.Redis(connection_pool = static.scheduler_sync_servers[0]).pubsub()
         pubsub.subscribe('CheeseAPI_scheduler')
         try:
             while True:
-                for message in pubsub.listen():
-                    if message['type'] == 'message':
-                        self.restart(message['data'].decode('utf-8'))
+                try:
+                    for message in pubsub.listen():
+                        if message['type'] == 'message':
+                            self.restart(message['data'].decode('utf-8'))
+                except redis.exceptions.RedisError:
+                    pubsub.close()
+                    time.sleep(app.sync_server_timeout)
+                    self._start_pubsub(app)
         except (KeyboardInterrupt, SystemExit):
             ...
 
@@ -272,7 +277,7 @@ class SchedulerProxy:
             if static.scheduler_sync_servers is None:
                 self._tasks[task.key] = task
             else:
-                static.scheduler_sync_servers[0].hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
+                redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
 
             if task.run_type == 'THREAD':
                 task._handler = threading.Thread(target = self.task_processing, args = (task, *args), kwargs = kwargs, daemon = True)
@@ -298,7 +303,7 @@ class SchedulerProxy:
             if static.scheduler_sync_servers is None:
                 self._tasks[task.key] = task
             else:
-                await static.scheduler_sync_servers[1].hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
+                await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
 
             task._handler = asyncio.create_task(self.async_task_processing(key, fn, *args, **kwargs))
         else:
@@ -339,15 +344,16 @@ class SchedulerProxy:
                     break
 
                 if static.scheduler_sync_servers is not None:
-                    static.scheduler_sync_servers[0].hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
-                    static.scheduler_sync_servers[0].hpexpire('CheeseAPI_scheduler_tasks', int(task.interval_time * 2000), key)
+                    sync_server = redis.Redis(connection_pool = static.scheduler_sync_servers[0])
+                    sync_server.hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+                    sync_server.hpexpire('CheeseAPI_scheduler_tasks', int(task.interval_time * 2000), key)
 
                 time.sleep(max(0, task.interval_time - time.time() + now))
         except (KeyboardInterrupt, SystemExit):
             ...
 
         if static.scheduler_sync_servers is not None:
-            static.scheduler_sync_servers[0].hpersist('CheeseAPI_scheduler_tasks', key)
+            redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hpersist('CheeseAPI_scheduler_tasks', key)
 
     async def async_task_processing(self, key: str, fn, *args, **kwargs):
         task = self.get_task(key)
@@ -380,8 +386,9 @@ class SchedulerProxy:
                 break
 
             if static.scheduler_sync_servers is not None:
-                await static.scheduler_sync_servers[1].hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
-                await static.scheduler_sync_servers[1].hpexpire('CheeseAPI_scheduler_tasks', int(task.interval_time * 2000), key)
+                sync_server = redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1])
+                await sync_server.hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+                await sync_server.hpexpire('CheeseAPI_scheduler_tasks', int(task.interval_time * 2000), key)
 
             await asyncio.sleep(max(0, task.interval_time - time.time() + now))
 
@@ -389,10 +396,10 @@ class SchedulerProxy:
             self._tasks.pop(task.key, None)
 
             if static.scheduler_sync_servers is not None:
-                await static.scheduler_sync_servers[1].hdel('CheeseAPI_scheduler_tasks', key)
+                await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)
         else:
             if static.scheduler_sync_servers is not None:
-                await static.scheduler_sync_servers[1].hpersist('CheeseAPI_scheduler_tasks', key)
+                await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hpersist('CheeseAPI_scheduler_tasks', key)
 
     def join(self, task: Task):
         if task.run_type == 'THREAD' and isinstance(task._handler, threading.Thread):
@@ -401,14 +408,15 @@ class SchedulerProxy:
             task._handler.join()
 
         if static.scheduler_sync_servers is not None:
-            static.scheduler_sync_servers[0].hdel('CheeseAPI_scheduler_tasks', task.key)
+            redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hdel('CheeseAPI_scheduler_tasks', task.key)
 
         self._tasks.pop(task.key, None)
 
     def restart(self, key: str):
         if static.scheduler_sync_servers is not None:
-            static.scheduler_sync_servers[0].hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
-            static.scheduler_sync_servers[0].publish('CheeseAPI_scheduler', key)
+            sync_server = redis.Redis(connection_pool = static.scheduler_sync_servers[0])
+            sync_server.hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+            sync_server.publish('CheeseAPI_scheduler', key)
             return
 
         task = self._tasks.get(key)
@@ -425,8 +433,9 @@ class SchedulerProxy:
 
     async def async_restart(self, key: str):
         if static.scheduler_sync_servers is not None:
-            await static.scheduler_sync_servers[1].hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
-            await static.scheduler_sync_servers[1].publish('CheeseAPI_scheduler', key)
+            sync_server = redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1])
+            await sync_server.hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+            await sync_server.publish('CheeseAPI_scheduler', key)
             return
 
         task = self._tasks.get(key)
@@ -445,7 +454,7 @@ class SchedulerProxy:
         task._queue.put(None)
 
         if static.scheduler_sync_servers is not None:
-            static.scheduler_sync_servers[0].hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+            redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
 
     def remove(self, key: str):
         task = self.get_task(key)
@@ -456,7 +465,7 @@ class SchedulerProxy:
         self._tasks.pop(key, None)
 
         if static.scheduler_sync_servers is not None:
-            static.scheduler_sync_servers[0].hdel('CheeseAPI_scheduler_tasks', key)
+            redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hdel('CheeseAPI_scheduler_tasks', key)
 
     async def async_stop(self, key: str):
         task = await self.async_get_task(key)
@@ -466,7 +475,7 @@ class SchedulerProxy:
         task._queue.put(None)
 
         if static.scheduler_sync_servers is not None:
-            await static.scheduler_sync_servers[1].hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+            await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
 
     async def async_remove(self, key: str):
         task = await self.async_get_task(key)
@@ -477,11 +486,11 @@ class SchedulerProxy:
         self._tasks.pop(key, None)
 
         if static.scheduler_sync_servers is not None:
-            await static.scheduler_sync_servers[1].hdel('CheeseAPI_scheduler_tasks', key)
+            await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)
 
     def get_task(self, key: str) -> Task | None:
         if static.scheduler_sync_servers is not None:
-            data = static.scheduler_sync_servers[0].hget('CheeseAPI_scheduler_tasks', key)
+            data = redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hget('CheeseAPI_scheduler_tasks', key)
             if data:
                 return Task.from_dict(json.loads(data))
             return
@@ -490,7 +499,7 @@ class SchedulerProxy:
 
     async def async_get_task(self, key: str) -> Task | None:
         if static.scheduler_sync_servers is not None:
-            data = await static.scheduler_sync_servers[1].hget('CheeseAPI_scheduler_tasks', key)
+            data = await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hget('CheeseAPI_scheduler_tasks', key)
             if data:
                 return Task.from_dict(json.loads(data))
             return
@@ -500,7 +509,7 @@ class SchedulerProxy:
     def get_tasks(self) -> dict[str, Task]:
         if static.scheduler_sync_servers is not None:
             return {
-                key: Task.from_dict(json.loads(data)) for key, data in static.scheduler_sync_servers[0].hgetall('CheeseAPI_scheduler_tasks').items()
+                key: Task.from_dict(json.loads(data)) for key, data in redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hgetall('CheeseAPI_scheduler_tasks').items()
             }
 
         return self._tasks
@@ -508,7 +517,7 @@ class SchedulerProxy:
     async def async_get_tasks(self) -> dict[str, Task]:
         if static.scheduler_sync_servers is not None:
             return {
-                key: Task.from_dict(json.loads(data)) for key, data in (await static.scheduler_sync_servers[1].hgetall('CheeseAPI_scheduler_tasks')).items()
+                key: Task.from_dict(json.loads(data)) for key, data in (await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hgetall('CheeseAPI_scheduler_tasks')).items()
             }
 
         return self._tasks

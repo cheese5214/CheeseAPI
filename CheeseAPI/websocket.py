@@ -119,7 +119,7 @@ class WebsocketProxy:
             }).encode()
             if static.websocket_data_encode is not None:
                 data = static.websocket_data_encode(data)
-            static.websocket_sync_servers[0].publish(path, data)
+            redis.Redis(connection_pool = static.websocket_sync_servers[0]).publish(path, data)
         elif path in Websocket.connectors:
             if websocket_key_or_keys is None:
                 for connector in Websocket.connectors[path]:
@@ -144,7 +144,7 @@ class WebsocketProxy:
             }).encode()
             if static.websocket_data_encode is not None:
                 data = static.websocket_data_encode(data)
-            await static.websocket_sync_servers[1].publish(path, data)
+            await redis.asyncio.Redis(connection_pool = static.websocket_sync_servers[1]).publish(path, data)
         elif path in Websocket.connectors:
             if websocket_key_or_keys is None:
                 tasks = [connector.send(data) for connector in Websocket.connectors[path]]
@@ -163,7 +163,7 @@ class WebsocketProxy:
             }).encode()
             if static.websocket_data_encode is not None:
                 data = static.websocket_data_encode(data)
-            static.websocket_sync_servers[0].publish(path, data)
+            redis.Redis(connection_pool = static.websocket_sync_servers[0]).publish(path, data)
         elif path in Websocket.connectors:
             if websocket_key_or_keys is None:
                 for connector in Websocket.connectors[path]:
@@ -187,7 +187,7 @@ class WebsocketProxy:
             }).encode()
             if static.websocket_data_encode is not None:
                 data = static.websocket_data_encode(data)
-            await static.websocket_sync_servers[1].publish(path, data)
+            await redis.asyncio.Redis(connection_pool = static.websocket_sync_servers[1]).publish(path, data)
         elif path in Websocket.connectors:
             if websocket_key_or_keys is None:
                 tasks = [connector.close(code, message) for connector in Websocket.connectors[path]]
