@@ -471,7 +471,7 @@ class AppProxy:
         if app.sync_server_url:
             static.websocket_sync_servers = (redis.ConnectionPool.from_url(app.sync_server_url), redis.asyncio.ConnectionPool.from_url(app.sync_server_url))
             static.websocket_sync_server = {}
-        app.scheduler._proxy.start(app)
+        app.scheduler._proxy.init(app)
 
 class CheeseAPI:
     __slots__ = ('_host', '_port', '_ipv6', '_logger_path', '_dual_stack', '_socket_backlog', '_socket_send_buffer_size', '_socket_receive_buffer_size', '_workers', '_ssl_cert', '_ssl_key', '_sync_server_url', '_static_path', '_printer', '_compress', '_compress_min_length', '_compress_level', '_manual_modules', '_exclude_modules', '_priority_modules', '_sync_server_data_encode', '_sync_server_data_decode', '_logger_messages', '_logger', '_is_running', '_request_timeout', '_keep_alive', '_keep_alive_timeout', '_keep_alive_max_requests', '_AppProxy_Class', '_RequestProxy_Class', '_proxy', '_signal', '_ResponseProxy_Class', '_RouteProxy_Class', '_route', '_WebsocketProxy_Class', '_cors', '_SchedulerProxy_Class', '_scheduler', '_sync_server_timeout')

@@ -286,12 +286,12 @@ class WebsocketProxy:
                 try:
                     await self.websocket.on_message(data.decode())
                 except Exception as e:
-                    await self.app.printer.websocket_message_error(e, self.websocket)
+                    self.app.printer.websocket_message_error(e, self.websocket)
             elif opcode == 0x2:
                 try:
                     await self.websocket.on_message(data)
                 except Exception as e:
-                    await self.app.printer.websocket_message_error(e, self.websocket)
+                    self.app.printer.websocket_message_error(e, self.websocket)
             elif opcode == 0x8:
                 break
             elif opcode == 0x9:
