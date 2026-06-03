@@ -94,7 +94,7 @@ class Task:
 
     async def async_start(self):
         if not self._handler:
-            self._handler = asyncio.create_task(self._scheduler_proxy.async_task_processing(self.key, self.fn, *self.args, **self.kwargs))
+            self._handler = asyncio.create_task(self._scheduler_proxy.async_task_processing(self.key, self._queue, self.fn, *self.args, **self.kwargs))
 
     @property
     def key(self) -> str:
@@ -436,13 +436,16 @@ class SchedulerProxy:
             return
 
         queue.get()
+        task._queue.get()
+        first_run = True
+
         if task.first_run_timer:
             await asyncio.sleep(max(0, task.first_run_timer.timestamp() - time.time()))
 
         while not queue.qsize():
             if static.scheduler_sync_servers:
                 task = await self.async_get_task(key)
-                if (not task or task._queue.qsize()):
+                if (not task or (not first_run and task._queue.qsize())):
                     break
 
             now = time.time()
@@ -456,21 +459,24 @@ class SchedulerProxy:
                 task = await self.async_get_task(key)
 
             if task:
+                if first_run:
+                    task._queue.get()
                 task._last_run_time = time.time() - now
                 task._last_run_timer = datetime.datetime.fromtimestamp(now)
                 task._run_num += 1
 
-            if static.scheduler_sync_servers:
-                sync_server = redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1])
-                await sync_server.hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
-                await sync_server.hpexpire('CheeseAPI_scheduler_tasks', int(task.timeout * 1000), key)
+                if static.scheduler_sync_servers:
+                    sync_server = redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1])
+                    await sync_server.hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+                    await sync_server.hpexpire('CheeseAPI_scheduler_tasks', int(task.timeout * 1000), key)
 
-            if not task.run_num_completed or (not task or task._queue.qsize()):
+            if (not task or task._queue.qsize()) or task.run_num_completed:
                 break
 
+            first_run = False
             await asyncio.sleep(max(0, task.interval_time - time.time() + now))
 
-        if task.auto_remove:
+        if not task or task.auto_remove:
             self._tasks.pop(task.key, None)
             if static.scheduler_sync_servers is not None:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)
