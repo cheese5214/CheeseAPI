@@ -6,7 +6,7 @@ from CheeseAPI import CheeseAPI
 app = CheeseAPI()
 ```
 
-## **`def __init__(self, host: str | None = None, port: int = 5214, *, ipv6: bool = False, logger_path: str | None = None, dual_stack: bool = False, socket_backlog: int | None = None, socket_send_buffer_size: int | None = None, socket_receive_buffer_size: int | None = None, workers: int = 1, ssl_cert: str | None = None, ssl_key: str | None = None, sync_server_url: str | None = None, static_path: dict[str, str] = {}, printer: Type[Printer] = Printer, compress: list[Literal['gzip', 'br', 'zstd', 'deflate']] = ['gzip', 'br', 'zstd', 'deflate'], compress_min_length: int = 1024, compress_level: int = 6, manual_modules: list[str] = [], exclude_modules: list[str] = [], priority_modules: list[str] = [], sync_server_data_encode: Callable[[bytes], bytes] | None = None, sync_server_data_decode: Callable[[bytes], bytes] | None = None, logger_messages: dict[str, 'Message'] = {}, request_timeout: float | None = None, keep_alive: bool = True, keep_alive_timeout: float = 5, keep_alive_max_requests: int = 100, AppProxy_Class: Type[AppProxy] = AppProxy, RequestProxy_Class: Type[RequestProxy] = RequestProxy, ResponseProxy_Class: Type[ResponseProxy] = ResponseProxy, RouteProxy_Class: Type[RouteProxy] = RouteProxy, cors_allow_origins: list[str] = ['*'], cors_allow_methods: Literal['GET', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD', 'CONNECT'] = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'CONNECT'], cors_allow_headers: list[str] = ['*'], cors_allow_credentials: bool = True, cors_expose_headers: list[str] = [], cors_max_age: int | None = None, WebsocketProxy_Class: Type[WebsocketProxy] = WebsocketProxy, route_patterns: list['Pattern'] = [], SchedulerProxy_Class: Type[SchedulerProxy] = SchedulerProxy)`**
+## **`def __init__(self, host: str | None = None, port: int = 5214, *, ipv6: bool = False, logger_path: str | None = None, dual_stack: bool = False, socket_backlog: int | None = None, socket_send_buffer_size: int | None = None, socket_receive_buffer_size: int | None = None, workers: int = 1, ssl_cert: str | None = None, ssl_key: str | None = None, sync_server_url: str | None = None, static_path: dict[str, str] = {}, printer: Type[Printer] = Printer, compress: list[Literal['gzip', 'br', 'zstd', 'deflate']] = ['gzip', 'br', 'zstd', 'deflate'], compress_min_length: int = 1024, compress_level: int = 6, manual_modules: list[str] = [], exclude_modules: list[str] = [], priority_modules: list[str] = [], sync_server_data_encode: Callable[[bytes], bytes] | None = None, sync_server_data_decode: Callable[[bytes], bytes] | None = None, logger_messages: dict[str, 'Message'] = {}, request_timeout: float | None = None, keep_alive: bool = True, keep_alive_timeout: float = 5, keep_alive_max_requests: int = 100, AppProxy_Class: Type[AppProxy] = AppProxy, RequestProxy_Class: Type[RequestProxy] = RequestProxy, ResponseProxy_Class: Type[ResponseProxy] = ResponseProxy, RouteProxy_Class: Type[RouteProxy] = RouteProxy, cors_allow_origins: list[str] = ['*'], cors_allow_methods: Literal['GET', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD', 'CONNECT'] = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'CONNECT'], cors_allow_headers: list[str] = ['*'], cors_allow_credentials: bool = True, cors_expose_headers: list[str] = [], cors_max_age: int | None = None, WebsocketProxy_Class: Type[WebsocketProxy] = WebsocketProxy, route_patterns: list['Pattern'] = [], SchedulerProxy_Class: Type[SchedulerProxy] = SchedulerProxy, sync_server_timeout: float = 5)`**
 
 - **Args**
 
@@ -125,6 +125,10 @@ app = CheeseAPI()
     - **SchedulerProxy_Class**
 
         若想要对定时任务处理逻辑进行处理，可传入自定义的 SchedulerProxy 类
+
+    - **sync_server_timeout**
+
+        同步服务器操作超时时间
 
 ## **`self.host: str`**
 
@@ -265,6 +269,10 @@ SSL 密钥路径
 ## **`self.SchedulerProxy_Class: Type[SchedulerProxy]`**
 
 若想要对定时任务处理逻辑进行处理，可传入自定义的 SchedulerProxy 类
+
+## **`self.sync_server_timeout: float`**
+
+同步服务器操作超时时间
 
 ## **`def start(self)`**
 

@@ -64,14 +64,6 @@ def before_server_start():
 
 ## **`self.after_request: CheeseSignal`**
 
-绑定协程函数`async def func(*, request: Request)`
-
-## **`self.before_request: CheeseSignal`**
-
-绑定协程函数`async def func(*, client_socket: socket.socket, addr: tuple[str, int])`
-
-## **`self.after_request: CheeseSignal`**
-
 绑定协程函数`async def func(*, request: Request | None)`
 
 ## **`self.before_response: CheeseSignal`**

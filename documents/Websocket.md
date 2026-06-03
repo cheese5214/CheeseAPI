@@ -18,24 +18,24 @@ class DefaultWebsocket(Websocket):
         ...
 ```
 
-## **`connector: dict[str, list[Self]]`**
+## **`connectors: dict[str, list[Self]]`**
 
 当前连接的客户端列表；该数据暂时不支持分布式环境
 
 ## **`def send(path: str, data: bytes | list | str | dict, *, websocket_key_or_keys: str | list[str] | None = None)`**
 
-向指定路径的客户端发送数据；若未指定 `websocket_key_or_keys` 则向所有连接的客户端发送数据
+向指定路径的客户端发送数据；若未指定 `websocket_key_or_keys` 则向所有连接的客户端发送数据。既可作静态方法调用 `Websocket.send(...)`，也可作实例方法调用 `self.send(data)`
 
 ## **`async def async_send(path: str, data: bytes | list | str | dict, *, websocket_key_or_keys: str | list[str] | None = None)`**
-向指定路径的客户端发送数据；若未指定 `websocket_key_or_keys` 则向所有连接的客户端发送数据
+向指定路径的客户端发送数据；若未指定 `websocket_key_or_keys` 则向所有连接的客户端发送数据。异步静态方法
 
-## **`def close(path: str, code: int = 1000, message: str = '', *, websocket_key_or_keys: str | list[str] | None = None)`**
+## **`close(path: str, code: int = 1000, message: str = '', *, websocket_key_or_keys: str | list[str] | None = None)`**
 
-关闭指定路径的客户端连接；若未指定 `websocket_key_or_keys` 则关闭所有连接的客户端
+关闭指定路径的客户端连接；若未指定 `websocket_key_or_keys` 则关闭所有连接的客户端。既可作静态方法调用 `Websocket.close(...)`，也可作实例方法调用 `self.close(code, message)`
 
 ## **`async def async_close(path: str, code: int = 1000, message: str = '', *, websocket_key_or_keys: str | list[str] | None = None)`**
 
-关闭指定路径的客户端连接；若未指定 `websocket_key_or_keys` 则关闭所有连接的客户端
+关闭指定路径的客户端连接；若未指定 `websocket_key_or_keys` 则关闭所有连接的客户端。异步静态方法
 
 ## **`self.request: Request`**
 
