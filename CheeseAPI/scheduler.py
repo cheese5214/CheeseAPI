@@ -477,7 +477,7 @@ class SchedulerProxy:
             await asyncio.sleep(max(0, task.interval_time - time.time() + now))
 
         if not task or task.auto_remove:
-            self._tasks.pop(task.key, None)
+            self._tasks.pop(key, None)
             if static.scheduler_sync_servers is not None:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)
         else:
@@ -544,10 +544,8 @@ class SchedulerProxy:
 
     def remove(self, key: str):
         task = self.get_task(key)
-        if not task:
-            raise KeyError(f'Task with key "{key}" does not exist')
-        if not task.is_running:
-            raise KeyError(f'Task with key "{key}" is not running')
+        if not task or not task.is_running:
+            return
 
         _task = self._tasks.get(key)
         if not _task:
@@ -576,10 +574,8 @@ class SchedulerProxy:
 
     async def async_remove(self, key: str):
         task = await self.async_get_task(key)
-        if not task:
-            raise KeyError(f'Task with key "{key}" does not exist')
-        if not task.is_running:
-            raise KeyError(f'Task with key "{key}" is remove')
+        if not task or not task.is_running:
+            return
 
         _task = self._tasks.get(key)
         if not _task:
