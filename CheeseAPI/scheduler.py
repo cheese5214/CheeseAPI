@@ -108,33 +108,25 @@ class Task:
 
     @property
     def last_run_timer(self) -> datetime.datetime | None:
-        '''
-        上一次的运行时刻
-        '''
+        ''' 上一次的运行时刻 '''
 
         return self._last_run_timer
 
     @property
     def last_run_time(self) -> float | None:
-        '''
-        上一次的运行耗时
-        '''
+        ''' 上一次的运行耗时 '''
 
         return self._last_run_time
 
     @property
     def run_num(self) -> int:
-        '''
-        运行次数
-        '''
+        ''' 运行次数 '''
 
         return self._run_num
 
     @property
     def is_running(self) -> bool:
-        '''
-        任务是否在运行中
-        '''
+        ''' 任务是否在运行中 '''
 
         return not self._queue.qsize()
 
@@ -180,72 +172,53 @@ class Scheduler:
         return await self._proxy.async_add(interval_time, fn, first_run_timer = first_run_timer, expected_run_num = expected_run_num, key = key, args = args, kwargs = kwargs, auto_remove = auto_remove, timeout = timeout)
 
     def start(self, key: str):
-        '''
-        启动任务
-        '''
+        ''' 启动任务 '''
 
         self._proxy.start(key)
 
     async def async_start(self, key: str):
-        '''
-        启动任务
-        '''
+        ''' 启动任务 '''
 
         await self._proxy.async_start(key)
 
     def stop(self, key: str):
-        '''
-        停止任务
-        '''
+        ''' 停止任务 '''
+
 
         self._proxy.stop(key)
 
     def remove(self, key: str):
-        '''
-        移除任务
-        '''
+        ''' 移除任务 '''
 
         self._proxy.remove(key)
 
     async def async_stop(self, key: str):
-        '''
-        停止任务
-        '''
+        ''' 停止任务 '''
 
         await self._proxy.async_stop(key)
 
     async def async_remove(self, key: str):
-        '''
-        移除任务
-        '''
+        ''' 移除任务 '''
 
         await self._proxy.async_remove(key)
 
     def get_tasks(self) -> dict[str, Task]:
-        '''
-        获取所有任务
-        '''
+        ''' 获取所有任务 '''
 
         return self._proxy.get_tasks()
 
     async def async_get_tasks(self) -> dict[str, Task]:
-        '''
-        获取所有任务
-        '''
+        ''' 获取所有任务 '''
 
         return await self._proxy.async_get_tasks()
 
     def get_task(self, key: str) -> Task | None:
-        '''
-        获取任务
-        '''
+        ''' 获取任务 '''
 
         return self._proxy.get_task(key)
 
     async def async_get_task(self, key: str) -> Task | None:
-        '''
-        获取任务
-        '''
+        ''' 获取任务 '''
 
         return await self._proxy.async_get_task(key)
 

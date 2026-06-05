@@ -590,169 +590,127 @@ class CheeseAPI:
 
     @property
     def logger_path(self) -> str | None:
-        '''
-        日志文件路径，支持日期格式化
-        '''
+        ''' 日志文件路径，支持日期格式化 '''
 
         return self._logger_path
 
     @property
     def dual_stack(self) -> bool:
-        '''
-        是否启用双栈支持；若系统不支持，则自动回退
-        '''
+        ''' 是否启用双栈支持；若系统不支持，则自动回退 '''
 
         return self._dual_stack
 
     @property
     def socket_backlog(self) -> int | None:
-        '''
-        最大连接数
-        '''
+        ''' 最大连接数 '''
 
         return self._socket_backlog
 
     @property
     def socket_send_buffer_size(self) -> int | None:
-        '''
-        发送缓冲区大小
-        '''
+        ''' 发送缓冲区大小 '''
 
         return self._socket_send_buffer_size
 
     @property
     def socket_receive_buffer_size(self) -> int | None:
-        '''
-        接收缓冲区大小
-        '''
+        ''' 接收缓冲区大小 '''
 
         return self._socket_receive_buffer_size
 
     @property
     def workers(self) -> int:
-        '''
-        工作进程数
-        '''
+        ''' 工作进程数 '''
 
         return self._workers
 
     @property
     def ssl_cert(self) -> str | None:
-        '''
-        SSL 证书路径
-        '''
+        ''' SSL 证书路径 '''
 
         return self._ssl_cert
 
     @property
     def ssl_key(self) -> str | None:
-        '''
-        SSL 密钥路径
-        '''
+        ''' SSL 密钥路径 '''
 
         return self._ssl_key
 
     @property
     def sync_server_url(self) -> str | None:
-        '''
-        同步服务器地址，用于多进程间同步数据；支持redis
-        '''
+        ''' 同步服务器地址，用于多进程间同步数据；支持redis '''
 
         return self._sync_server_url
 
     @property
     def static_path(self) -> dict[str, str]:
-        '''
-        静态文件路径映射，格式为`{url_path: file_system_path}`
-        '''
+        ''' 静态文件路径映射，格式为`{url_path: file_system_path}` '''
 
         return self._static_path
 
     @property
     def printer(self) -> Type[Printer]:
-        '''
-        自定义消息输出
-        '''
+        ''' 自定义消息输出 '''
 
         return self._printer
 
     @property
     def compress(self) -> list[Literal['gzip', 'br', 'zstd', 'deflate']]:
-        '''
-        支持的压缩算法，按照顺序尝试压缩
-        '''
+        ''' 支持的压缩算法，按照顺序尝试压缩 '''
 
         return self._compress
 
     @property
     def compress_min_length(self) -> int:
-        '''
-        启用压缩的最小响应体长度
-        '''
+        ''' 启用压缩的最小响应体长度 '''
 
         return self._compress_min_length
 
     @property
     def compress_level(self) -> int:
-        '''
-        压缩等级，每个算法的压缩级别可能不同，详见各算法文档
-        '''
+        ''' 压缩等级，每个算法的压缩级别可能不同，详见各算法文档 '''
 
         return self._compress_level
 
     @property
     def manual_modules(self) -> list[str]:
-        '''
-        手动加载的模块列表
-        '''
+        ''' 手动加载的模块列表 '''
 
         return self._manual_modules
 
     @property
     def exclude_modules(self) -> list[str]:
-        '''
-        排除加载的模块列表
-        '''
+        ''' 排除加载的模块列表 '''
 
         return self._exclude_modules
 
     @property
     def priority_modules(self) -> list[str]:
-        '''
-        优先加载的模块列表
-        '''
+        ''' 优先加载的模块列表 '''
 
         return self._priority_modules
 
     @property
     def sync_server_data_encode(self) -> Callable[[bytes], bytes] | None:
-        '''
-        同步服务器数据编码处理函数
-        '''
+        ''' 同步服务器数据编码处理函数 '''
 
         return self._sync_server_data_encode
 
     @property
     def sync_server_data_decode(self) -> Callable[[bytes], bytes] | None:
-        '''
-        同步服务器数据解码处理函数
-        '''
+        ''' 同步服务器数据解码处理函数 '''
 
         return self._sync_server_data_decode
 
     @property
     def logger_messages(self) -> dict[str, 'Message']:
-        '''
-        归属于 CheeseAPI 日志的消息列表
-        '''
+        ''' 归属于 CheeseAPI 日志的消息列表 '''
 
         return self._logger_messages
 
     @property
     def logger(self) -> CheeseLogger:
-        '''
-        归属于 CheeseAPI 日志实例
-        '''
+        ''' 归属于 CheeseAPI 日志实例 '''
 
         return self._logger
 
@@ -770,9 +728,7 @@ class CheeseAPI:
 
     @property
     def keep_alive(self) -> bool:
-        '''
-        是否启用长连接
-        '''
+        ''' 是否启用长连接 '''
 
         return self._keep_alive
 
@@ -782,49 +738,37 @@ class CheeseAPI:
 
     @property
     def keep_alive_max_requests(self) -> int:
-        '''
-        长连接最大请求次数
-        '''
+        ''' 长连接最大请求次数 '''
 
         return self._keep_alive_max_requests
 
     @property
     def AppProxy_Class(self) -> Type[AppProxy]:
-        '''
-        若想要对底层逻辑进行处理，可传入自定义的 AppProxy 类
-        '''
+        ''' 若想要对底层逻辑进行处理，可传入自定义的 AppProxy 类 '''
 
         return self._AppProxy_Class
 
     @property
     def RequestProxy_Class(self) -> Type[RequestProxy]:
-        '''
-        若想要对请求处理逻辑进行处理，可传入自定义的 RequestProxy 类
-        '''
+        ''' 若想要对请求处理逻辑进行处理，可传入自定义的 RequestProxy 类 '''
 
         return self._RequestProxy_Class
 
     @property
     def ResponseProxy_Class(self) -> Type[ResponseProxy]:
-        '''
-        若想要对响应处理逻辑进行处理，可传入自定义的 ResponseProxy 类
-        '''
+        ''' 若想要对响应处理逻辑进行处理，可传入自定义的 ResponseProxy 类 '''
 
         return self._ResponseProxy_Class
 
     @property
     def RouteProxy_Class(self) -> Type[RouteProxy]:
-        '''
-        若想要对路由处理逻辑进行处理，可传入自定义的 RouteProxy 类
-        '''
+        ''' 若想要对路由处理逻辑进行处理，可传入自定义的 RouteProxy 类 '''
 
         return self._RouteProxy_Class
 
     @property
     def route(self) -> AppRoute:
-        '''
-        总路由
-        '''
+        ''' 总路由 '''
 
         return self._route
 
@@ -834,32 +778,24 @@ class CheeseAPI:
 
     @property
     def WebsocketProxy_Class(self) -> Type[WebsocketProxy]:
-        '''
-        若想要对 Websocket 处理逻辑进行处理，可传入自定义的 WebsocketProxy 类
-        '''
+        ''' 若想要对 Websocket 处理逻辑进行处理，可传入自定义的 WebsocketProxy 类 '''
 
         return self._WebsocketProxy_Class
 
     @property
     def scheduler(self) -> 'Scheduler':
-        '''
-        任务调度
-        '''
+        ''' 任务调度 '''
 
         return self._scheduler
 
     @property
     def SchedulerProxy_Class(self) -> Type[SchedulerProxy]:
-        '''
-        自定义任务调度器代理类
-        '''
+        ''' 自定义任务调度器代理类 '''
 
         return self._SchedulerProxy_Class
 
     @property
     def sync_server_timeout(self) -> float:
-        '''
-        同步服务器操作超时时间
-        '''
+        ''' 同步服务器操作超时时间 '''
 
         return self._sync_server_timeout

@@ -59,9 +59,7 @@ class File:
 
     @property
     def data_in_file(self) -> bool:
-        '''
-        是否将数据保存在文件中，若否则读取文件内容到内存
-        '''
+        ''' 是否将数据保存在文件中，若否则读取文件内容到内存 '''
 
         return self._data_in_file
 

@@ -137,9 +137,7 @@ class Route:
 
     @property
     def path(self) -> str:
-        '''
-        路由前缀
-        '''
+        ''' 路由前缀 '''
 
         return self._path
 
@@ -179,17 +177,13 @@ class AppRoute(Route):
 
     @property
     def patterns(self) -> list[Pattern]:
-        '''
-        动态路由匹配模式
-        '''
+        ''' 动态路由匹配模式 '''
 
         return self._patterns
 
     @property
     def routes(self) -> dict[str, dict[HTTP_METHOD_TYPE, RouteDict]]:
-        '''
-        所有路由
-        '''
+        ''' 所有路由 '''
 
         return self._routes
 

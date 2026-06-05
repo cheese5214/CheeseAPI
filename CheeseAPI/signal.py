@@ -36,33 +36,25 @@ class Signal:
 
     @property
     def before_load_module(self) -> CheeseSignal:
-        '''
-        绑定函数`def func(*, index: int, module: str)`
-        '''
+        ''' 绑定函数`def func(*, index: int, module: str)` '''
 
         return self._before_load_module
 
     @property
     def after_load_module(self) -> CheeseSignal:
-        '''
-        绑定函数`def func(*, index: int, module: str)`
-        '''
+        ''' 绑定函数`def func(*, index: int, module: str)` '''
 
         return self._after_load_module
 
     @property
     def before_load_modules(self) -> CheeseSignal:
-        '''
-        绑定函数`def func(*, modules: list[str])`
-        '''
+        ''' 绑定函数`def func(*, modules: list[str])` '''
 
         return self._before_load_modules
 
     @property
     def after_load_modules(self) -> CheeseSignal:
-        '''
-        绑定函数`def func(*, modules: list[str])`
-        '''
+        ''' 绑定函数`def func(*, modules: list[str])` '''
 
         return self._after_load_modules
 
@@ -84,80 +76,60 @@ class Signal:
 
     @property
     def before_workers_start(self) -> CheeseSignal:
-        '''
-        绑定函数`def func(*, workers: int)`
-        '''
+        ''' 绑定函数`def func(*, workers: int)` '''
 
         return self._before_workers_start
 
     @property
     def after_workers_start(self) -> CheeseSignal:
-        '''
-        绑定函数`def func(*, workers: int)`
-        '''
+        ''' 绑定函数`def func(*, workers: int)` '''
 
         return self._after_workers_start
 
     @property
     def before_worker_start(self) -> CheeseSignal:
-        '''
-        绑定函数`def func(*, is_first: bool)`
-        '''
+        ''' 绑定函数`def func(*, is_first: bool)` '''
 
         return self._before_worker_start
 
     @property
     def after_worker_start(self) -> CheeseSignal:
-        '''
-        绑定协程函数`async def func(*, is_first: bool)`
-        '''
+        ''' 绑定协程函数`async def func(*, is_first: bool)` '''
 
         return self._after_worker_start
 
     @property
     def before_worker_stop(self) -> CheeseSignal:
-        '''
-        绑定协程函数`async def func(*, is_first: bool)`
-        '''
+        ''' 绑定协程函数`async def func(*, is_first: bool)` '''
 
         return self._before_worker_stop
 
     @property
     def after_worker_stop(self) -> CheeseSignal:
-        '''
-        绑定函数`def func(*, is_first: bool)`
-        '''
+        ''' 绑定函数`def func(*, is_first: bool)` '''
 
         return self._after_worker_stop
 
     @property
     def before_request(self) -> CheeseSignal:
-        '''
-        绑定协程函数`async def func(*, client_socket: socket.socket, addr: tuple[str, int])`
-        '''
+        ''' 绑定协程函数`async def func(*, client_socket: socket.socket, addr: tuple[str, int])` '''
 
         return self._before_request
 
     @property
     def after_request(self) -> CheeseSignal:
-        '''
-        绑定协程函数`async def func(*, request: Request | None)`
-        '''
+        ''' 绑定协程函数`async def func(*, request: Request | None)` '''
 
         return self._after_request
 
     @property
     def before_response(self) -> CheeseSignal:
-        '''
-        绑定协程函数`async def func(*, response: Response) -> Response`
-        '''
+        ''' 绑定协程函数`async def func(*, response: Response) -> Response` '''
 
         return self._before_response
 
     @property
     def after_response(self) -> CheeseSignal:
-        '''
-        绑定协程函数`async def func(*, response: Response)`
-        '''
+        ''' 绑定协程函数`async def func(*, response: Response)` '''
 
         return self._after_response

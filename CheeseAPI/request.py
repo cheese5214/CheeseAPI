@@ -48,9 +48,7 @@ class Request:
         return await self._proxy.recv_body(get_all = get_all)
 
     async def parse_body(self):
-        '''
-        若在路由中设置了 `auto_recv_body = False`，则需要手动调用此方法解析请求体
-        '''
+        ''' 若在路由中设置了 `auto_recv_body = False`，则需要手动调用此方法解析请求体 '''
 
         await self._proxy.parse_body()
 
