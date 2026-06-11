@@ -1,3 +1,4 @@
+import inspect
 import datetime, uuid, threading, multiprocessing, asyncio, time, json
 from typing import Callable, Literal, TYPE_CHECKING
 
@@ -39,7 +40,7 @@ class Task:
             - expected_run_num: 预期执行次数，若未设置则无限次执行
             - key: 默认为随机 uuid
             - run_type: 任务执行方式，可选线程、协程、进程
-            - args: 默认首位是 `app: CheeseAPI`
+            - kwargs: 自动包含 `app: CheeseAPI`，如果不提供 app 参数位置，则不会传入
             - auto_remove: 任务完成期望次数后是否自动移除
             - timeout: 当 app.sync_server_url 存在时，任务超过多少秒没有执行完毕则认为执行失败，在 sync_server 中会视为任务删除，None 默认为 interval_time * 2 的值；恢复执行后会在 sync_server 上自动恢复
         '''
@@ -55,8 +56,8 @@ class Task:
         self.run_type: Literal['THREAD', 'PROCESS', 'ASYNC'] = run_type
         ''' 任务执行方式，可选线程、协程、进程 '''
         self.args: tuple = args
-        ''' 默认首位是 `app: CheeseAPI` '''
         self.kwargs: dict = kwargs
+        ''' 自动包含 `app: CheeseAPI`，如果不提供 app 参数位置，则不会传入 '''
         self.auto_remove: bool = auto_remove
         ''' 任务完成期望次数后是否自动移除 '''
         self.timeout: float = timeout if timeout is not None else interval_time * 2
@@ -146,7 +147,7 @@ class Scheduler:
             - expected_run_num: 预期执行次数，若未设置则无限次执行
             - key: 默认为 uuid
             - run_type: 任务执行方式，可选线程、进程
-            - args: 默认首位是 `app: CheeseAPI`
+            - kwargs: 自动包含 `app: CheeseAPI`，如果不提供 app 参数位置，则不会传入
             - auto_remove: 任务完成期望次数后是否自动移除
             - timeout: 当 app.sync_server_url 存在时，任务超过多少秒没有执行完毕则认为执行失败，在 sync_server 中会视为任务删除，None 默认为 interval_time * 2 的值；恢复执行后会在 sync_server 上自动恢复
         '''
@@ -164,7 +165,7 @@ class Scheduler:
             - first_run_timer: 首次执行时间，若值小于当前时间则立刻执行
             - expected_run_num: 预期执行次数，若未设置则无限次执行
             - key: 默认为 uuid
-            - args: 默认首位是 `app: CheeseAPI`
+            - kwargs: 自动包含 `app: CheeseAPI`，如果不提供 app 参数位置，则不会传入
             - auto_remove: 任务完成期望次数后是否自动移除
             - timeout: 当 app.sync_server_url 存在时，任务超过多少秒没有执行完毕则认为执行失败，在 sync_server 中会视为任务删除，None 默认为 interval_time * 2 的值；恢复执行后会在 sync_server 上自动恢复
         '''
@@ -371,7 +372,10 @@ class SchedulerProxy:
                 now = time.time()
 
                 try:
-                    fn(self.app, *args, **kwargs)
+                    if 'app' in inspect.signature(fn).parameters:
+                        fn(*args, app = self.app, **kwargs)
+                    else:
+                        fn(*args, **kwargs)
                 except Exception as e:
                     self.app.printer.scheduler_error(e, task)
 
@@ -424,7 +428,10 @@ class SchedulerProxy:
             now = time.time()
 
             try:
-                await fn(self.app, *args, **kwargs)
+                if 'app' in inspect.signature(fn).parameters:
+                    await fn(*args, app = self.app, **kwargs)
+                else:
+                    await fn(*args, **kwargs)
             except Exception as e:
                 self.app.printer.scheduler_error(e, task)
 
