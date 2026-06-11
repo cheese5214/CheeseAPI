@@ -334,7 +334,10 @@ class AppProxy:
     async def get_response(self, request: Request) -> Response:
         if inspect.isfunction(request.fn):
             try:
-                return await request.fn(request = request)
+                if 'request' in inspect.signature(request.fn).parameters:
+                    return await request.fn(request = request)
+                else:
+                    return await request.fn()
             except Exception as e:
                 self.app.printer.fn_error(e, request)
                 return Response(status = 500)
