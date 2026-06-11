@@ -210,7 +210,7 @@ class WebsocketProxy:
             await self.message()
             await self.disconnect()
         except Exception as e:
-            await self.app.printer.websocket_error(self.websocket, e)
+            await self.app.printer.websocket_error(e, self.websocket)
 
     async def get_response(self) -> Response:
         headers = {
