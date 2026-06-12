@@ -16,10 +16,10 @@ class Task:
         for key, value in data.items():
             if key == '_queue':
                 if value:
-                    value = multiprocessing.Queue()
+                    value = multiprocessing.get_context('spawn').Queue()
                     value.put(None)
                 else:
-                    value = multiprocessing.Queue()
+                    value = multiprocessing.get_context('spawn').Queue()
             elif key == 'first_run_timer':
                 value = datetime.datetime.fromtimestamp(value) if value else None
             elif key == '_last_run_timer':
@@ -67,7 +67,7 @@ class Task:
         self._last_run_time: float | None = None
         self._run_num: int = 0
         self._handler: threading.Thread | multiprocessing.Process | asyncio.Task | None = None
-        self._queue = multiprocessing.Queue()
+        self._queue = multiprocessing.get_context('spawn').Queue()
 
     def __getstate__(self) -> tuple[None, dict[str, any]]:
         state = {
