@@ -372,7 +372,9 @@ class SchedulerProxy:
                 now = time.time()
 
                 try:
-                    if 'app' in inspect.signature(fn).parameters:
+                    signature = inspect.signature(fn)
+                    has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values())
+                    if 'app' in signature.parameters or has_kwargs:
                         fn(*args, app = self.app, **kwargs)
                     else:
                         fn(*args, **kwargs)
@@ -386,6 +388,8 @@ class SchedulerProxy:
                     task._last_run_time = time.time() - now
                     task._last_run_timer = datetime.datetime.fromtimestamp(now)
                     task._run_num += 1
+                    if first_run:
+                        task._queue.get()
 
                     if static.scheduler_sync_servers:
                         sync_server = redis.Redis(connection_pool = static.scheduler_sync_servers[0])
@@ -423,7 +427,9 @@ class SchedulerProxy:
             now = time.time()
 
             try:
-                if 'app' in inspect.signature(fn).parameters:
+                signature = inspect.signature(fn)
+                has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values())
+                if 'app' in signature.parameters or has_kwargs:
                     await fn(*args, app = self.app, **kwargs)
                 else:
                     await fn(*args, **kwargs)
@@ -437,6 +443,8 @@ class SchedulerProxy:
                 task._last_run_time = time.time() - now
                 task._last_run_timer = datetime.datetime.fromtimestamp(now)
                 task._run_num += 1
+                if first_run:
+                    task._queue.get()
 
                 if static.scheduler_sync_servers:
                     sync_server = redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1])
@@ -526,6 +534,7 @@ class SchedulerProxy:
             if static.scheduler_sync_servers:
                 redis.Redis(connection_pool = static.scheduler_sync_servers[0]).publish('CheeseAPI_scheduler', json.dumps(['remove', key]))
         else:
+            _task._queue.put(None)
             self._tasks.pop(key, None)
         if static.scheduler_sync_servers:
             redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hdel('CheeseAPI_scheduler_tasks', key)
@@ -556,6 +565,7 @@ class SchedulerProxy:
             if static.scheduler_sync_servers:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).publish('CheeseAPI_scheduler', json.dumps(['remove', key]))
         else:
+            _task._queue.put(None)
             self._tasks.pop(key, None)
         if static.scheduler_sync_servers:
             await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)

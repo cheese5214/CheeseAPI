@@ -334,7 +334,8 @@ class AppProxy:
     async def get_response(self, request: Request) -> Response:
         if inspect.isfunction(request.fn):
             try:
-                if 'request' in inspect.signature(request.fn).parameters:
+                signature = inspect.signature(request.fn)
+                if 'request' in signature.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()):
                     return await request.fn(request = request)
                 else:
                     return await request.fn()

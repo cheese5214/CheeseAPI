@@ -1,4 +1,4 @@
-import json
+import json, inspect
 from typing import Callable, TYPE_CHECKING
 from functools import wraps
 
@@ -20,10 +20,8 @@ def validator(*, json_model: pydantic.BaseModel | None = None, form_model: pydan
 
     def wrapper(fn: Callable) -> Callable:
         @wraps(fn)
-        async def decorator(*args, **kwargs):
+        async def decorator(*args, request: 'Request', **kwargs):
             try:
-                request: 'Request' = kwargs.get('request', None)
-
                 json_data = None
                 if json_model is not None:
                     json_data = json_model.model_validate(request.json or {}, by_alias = True)
@@ -59,6 +57,10 @@ def validator(*, json_model: pydantic.BaseModel | None = None, form_model: pydan
                 else:
                     return Response(json.loads(e.json()), 400)
 
-            return await fn(*args, **kwargs)
+            signature = inspect.signature(fn)
+            if 'request' in signature.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()):
+                return await fn(*args, request = request, **kwargs)
+            else:
+                return await fn(*args, **kwargs)
         return decorator
     return wrapper
