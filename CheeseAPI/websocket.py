@@ -246,35 +246,42 @@ class WebsocketProxy:
         await self.websocket.on_connect()
 
     async def sync_server_running(self):
-        if self.app.sync_server_url.startswith('redis'):
-            pubsub = static.websocket_sync_server[self.websocket.request.path].pubsub()
-            await pubsub.subscribe(self.websocket.request.path)
-            async for message in pubsub.listen():
-                if message['type'] != 'message':
-                    continue
+        try:
+            if self.app.sync_server_url.startswith('redis'):
+                while self.websocket.is_running:
+                    try:
+                        pubsub = static.websocket_sync_server[self.websocket.request.path].pubsub()
+                        await pubsub.subscribe(self.websocket.request.path)
+                        async for message in pubsub.listen():
+                            if message['type'] != 'message':
+                                continue
 
-                connectors = Websocket.connectors.get(self.websocket.request.path)
-                if not connectors:
-                    continue
+                            connectors = Websocket.connectors.get(self.websocket.request.path)
+                            if not connectors:
+                                continue
 
-                message = message['data']
-                if static.websocket_data_decode is not None:
-                    message = static.websocket_data_decode(message)
-                message = json.loads(message.decode())
-                if isinstance(message['key'], list):
-                    connectors = [connector for connector in connectors if connector.key in message['key']]
-                elif isinstance(message['key'], str):
-                    connectors = [connector for connector in connectors if connector.key == message['key']]
-                else:
-                    connectors = [connector for connector in connectors]
+                            message = message['data']
+                            if static.websocket_data_decode is not None:
+                                message = static.websocket_data_decode(message)
+                            message = json.loads(message.decode())
+                            if isinstance(message['key'], list):
+                                connectors = [connector for connector in connectors if connector.key in message['key']]
+                            elif isinstance(message['key'], str):
+                                connectors = [connector for connector in connectors if connector.key == message['key']]
+                            else:
+                                connectors = [connector for connector in connectors]
 
-                if connectors:
-                    if message['event'] == 'send':
-                        for connector in connectors:
-                            asyncio.create_task(connector.send(message['data']))
-                    elif message['event'] == 'close':
-                        for connector in connectors:
-                            asyncio.create_task(connector.close())
+                            if connectors:
+                                if message['event'] == 'send':
+                                    for connector in connectors:
+                                        asyncio.create_task(connector.send(message['data']))
+                                elif message['event'] == 'close':
+                                    for connector in connectors:
+                                        asyncio.create_task(connector.close())
+                    except redis.exceptions.RedisError:
+                        await asyncio.sleep(self.app.sync_server_timeout)
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            ...
 
     async def message(self):
         while True:
