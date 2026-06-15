@@ -242,6 +242,7 @@ class SchedulerProxy:
 
     def __setstate__(self, state):
         self.app = state[1]['app']
+        self._tasks = {}
 
     def init(self, app = None):
         if not app:
@@ -357,7 +358,6 @@ class SchedulerProxy:
                 return
 
             queue.get()
-            task._queue.get()
             first_run = True
 
             if task.first_run_timer:
@@ -383,8 +383,6 @@ class SchedulerProxy:
                     task = self.get_task(key)
 
                 if task:
-                    if first_run:
-                        task._queue.get()
                     task._last_run_time = time.time() - now
                     task._last_run_timer = datetime.datetime.fromtimestamp(now)
                     task._run_num += 1
@@ -402,8 +400,6 @@ class SchedulerProxy:
         except (KeyboardInterrupt, SystemExit):
             ...
 
-        queue.put(None)
-
         if static.scheduler_sync_servers and task:
             redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hpersist('CheeseAPI_scheduler_tasks', key)
 
@@ -413,7 +409,6 @@ class SchedulerProxy:
             return
 
         queue.get()
-        task._queue.get()
         first_run = True
 
         if task.first_run_timer:
@@ -439,8 +434,6 @@ class SchedulerProxy:
                 task = await self.async_get_task(key)
 
             if task:
-                if first_run:
-                    task._queue.get()
                 task._last_run_time = time.time() - now
                 task._last_run_timer = datetime.datetime.fromtimestamp(now)
                 task._run_num += 1
@@ -470,7 +463,8 @@ class SchedulerProxy:
         elif task.run_type == 'PROCESS' and isinstance(task._handler, multiprocessing.Process):
             task._handler.join()
         self._tasks.pop(task.key, None)
-        redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hdel('CheeseAPI_scheduler_tasks', task.key)
+        if static.scheduler_sync_servers:
+            redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hdel('CheeseAPI_scheduler_tasks', task.key)
 
     def start(self, key: str):
         task = self.get_task(key)
@@ -504,7 +498,7 @@ class SchedulerProxy:
         if not task and static.scheduler_sync_servers:
             await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).publish('CheeseAPI_scheduler', json.dumps(['start', key]))
         else:
-            task._handler = asyncio.create_task(self.async_task_processing(task, *task.args, **task.kwargs))
+            task._handler = asyncio.create_task(self.async_task_processing(key, task._queue, task.fn, *task.args, **task.kwargs))
 
     def stop(self, key: str):
         task = self.get_task(key)
@@ -524,7 +518,7 @@ class SchedulerProxy:
 
     def remove(self, key: str):
         task = self.get_task(key)
-        if not task or not task.is_running:
+        if not task:
             return
 
         _task = self._tasks.get(key)
@@ -554,7 +548,7 @@ class SchedulerProxy:
 
     async def async_remove(self, key: str):
         task = await self.async_get_task(key)
-        if not task or not task.is_running:
+        if not task:
             return
 
         _task = self._tasks.get(key)
