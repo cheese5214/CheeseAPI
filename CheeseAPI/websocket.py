@@ -2,7 +2,7 @@ import base64, hashlib, asyncio, ssl, struct, json
 from functools import partial
 from typing import TYPE_CHECKING, AsyncIterable, Self
 
-import redis
+import redis, redis.exceptions
 
 from CheeseAPI import static
 from CheeseAPI.response import Response
@@ -248,11 +248,12 @@ class WebsocketProxy:
     async def sync_server_running(self):
         try:
             if self.app.sync_server_url.startswith('redis'):
-                while self.websocket.is_running:
+                while True:
                     try:
                         pubsub = static.websocket_sync_server[self.websocket.request.path].pubsub()
                         await pubsub.subscribe(self.websocket.request.path)
                         async for message in pubsub.listen():
+                            print(message)
                             if message['type'] != 'message':
                                 continue
 
