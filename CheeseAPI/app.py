@@ -473,7 +473,7 @@ class AppProxy:
         static.websocket_data_decode = app.sync_server_data_decode
         static.websocket_data_encode = app.sync_server_data_encode
         if app.sync_server_url:
-            static.websocket_sync_servers = (redis.ConnectionPool.from_url(app.sync_server_url), redis.asyncio.ConnectionPool.from_url(app.sync_server_url))
+            static.websocket_sync_servers = (redis.ConnectionPool.from_url(app.sync_server_url, socket_timeout = app.sync_server_timeout, socket_connect_timeout = app.sync_server_timeout), redis.asyncio.ConnectionPool.from_url(app.sync_server_url, socket_timeout = app.sync_server_timeout, socket_connect_timeout = app.sync_server_timeout))
             static.websocket_sync_server = {}
         app.scheduler._proxy.init(app)
 

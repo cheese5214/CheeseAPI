@@ -249,7 +249,7 @@ class SchedulerProxy:
             app = self.app
 
         if app.sync_server_url:
-            static.scheduler_sync_servers = (redis.ConnectionPool.from_url(app.sync_server_url), redis.asyncio.ConnectionPool.from_url(app.sync_server_url))
+            static.scheduler_sync_servers = (redis.ConnectionPool.from_url(app.sync_server_url, socket_timeout = app.sync_server_timeout, socket_connect_timeout = app.sync_server_timeout), redis.asyncio.ConnectionPool.from_url(app.sync_server_url, socket_timeout = app.sync_server_timeout, socket_connect_timeout = app.sync_server_timeout))
             threading.Thread(target = self._start_pubsub, args = (app,), daemon = True).start()
             coro = self._async_start_pubsub(app)
             try:
@@ -261,7 +261,7 @@ class SchedulerProxy:
         try:
             while True:
                 try:
-                    pubsub = redis.Redis(connection_pool = static.scheduler_sync_servers[0]).pubsub()
+                    pubsub = redis.from_url(app.sync_server_url, socket_timeout = None, socket_connect_timeout = None).pubsub()
                     pubsub.subscribe('CheeseAPI_scheduler')
                     for message in pubsub.listen():
                         if message['type'] == 'message':
@@ -278,16 +278,17 @@ class SchedulerProxy:
                             elif data[0] == 'remove':
                                 self.remove(data[1])
                 except redis.exceptions.RedisError:
+                    pubsub.close()
                     time.sleep(app.sync_server_timeout)
         except (KeyboardInterrupt, SystemExit):
             ...
 
     async def _async_start_pubsub(self, app: 'CheeseAPI'):
-        pubsub = redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).pubsub()
-        await pubsub.subscribe('CheeseAPI_scheduler')
         try:
             while True:
                 try:
+                    pubsub = redis.asyncio.from_url(app.sync_server_url, socket_timeout = None, socket_connect_timeout = None).pubsub()
+                    await pubsub.subscribe('CheeseAPI_scheduler')
                     async for message in pubsub.listen():
                         if message['type'] == 'message':
                             data = json.loads(message['data'])
@@ -305,7 +306,6 @@ class SchedulerProxy:
                 except redis.exceptions.RedisError:
                     await pubsub.close()
                     await asyncio.sleep(app.sync_server_timeout)
-                    await self._async_start_pubsub(app)
         except (KeyboardInterrupt, SystemExit):
             ...
 
@@ -482,29 +482,31 @@ class SchedulerProxy:
         if not task.is_running:
             raise KeyError(f'Task with key "{key}" is not running')
 
-        _task = self._tasks.get(key)
-        if not _task:
+        local_task = self._tasks.get(key)
+        if not local_task:
             if static.scheduler_sync_servers:
                 redis.Redis(connection_pool = static.scheduler_sync_servers[0]).publish('CheeseAPI_scheduler', json.dumps(['stop', key]))
         else:
-            _task._queue.put(None)
-        if static.scheduler_sync_servers:
-            redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+            local_task._queue.put(None)
+            if static.scheduler_sync_servers:
+                redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+
+        time.sleep(self.app.sync_server_timeout)
 
     def remove(self, key: str):
         task = self.get_task(key)
         if not task:
             return
 
-        _task = self._tasks.get(key)
-        if not _task:
+        local_task = self._tasks.get(key)
+        if not local_task:
             if static.scheduler_sync_servers:
                 redis.Redis(connection_pool = static.scheduler_sync_servers[0]).publish('CheeseAPI_scheduler', json.dumps(['remove', key]))
         else:
-            _task._queue.put(None)
+            local_task._queue.put(None)
             self._tasks.pop(key, None)
-        if static.scheduler_sync_servers:
-            redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hdel('CheeseAPI_scheduler_tasks', key)
+            if static.scheduler_sync_servers:
+                redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hdel('CheeseAPI_scheduler_tasks', key)
 
     async def async_stop(self, key: str):
         task = await self.async_get_task(key)
@@ -513,29 +515,29 @@ class SchedulerProxy:
         if not task.is_running:
             raise KeyError(f'Task with key "{key}" is not running')
 
-        _task = self._tasks.get(key)
-        if not _task:
+        local_task = self._tasks.get(key)
+        if not local_task:
             if static.scheduler_sync_servers:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).publish('CheeseAPI_scheduler', json.dumps(['stop', key]))
         else:
-            _task._queue.put(None)
-        if static.scheduler_sync_servers:
-            await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+            local_task._queue.put(None)
+            if static.scheduler_sync_servers:
+                await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
 
     async def async_remove(self, key: str):
         task = await self.async_get_task(key)
         if not task:
             return
 
-        _task = self._tasks.get(key)
-        if not _task:
+        local_task = self._tasks.get(key)
+        if not local_task:
             if static.scheduler_sync_servers:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).publish('CheeseAPI_scheduler', json.dumps(['remove', key]))
         else:
-            _task._queue.put(None)
+            local_task._queue.put(None)
             self._tasks.pop(key, None)
-        if static.scheduler_sync_servers:
-            await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)
+            if static.scheduler_sync_servers:
+                await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)
 
     def get_task(self, key: str) -> Task | None:
         if static.scheduler_sync_servers is not None:

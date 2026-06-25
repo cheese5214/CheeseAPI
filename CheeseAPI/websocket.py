@@ -253,7 +253,6 @@ class WebsocketProxy:
                         pubsub = static.websocket_sync_server[self.websocket.request.path].pubsub()
                         await pubsub.subscribe(self.websocket.request.path)
                         async for message in pubsub.listen():
-                            print(message)
                             if message['type'] != 'message':
                                 continue
 
