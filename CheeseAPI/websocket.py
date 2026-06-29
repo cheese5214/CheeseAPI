@@ -230,7 +230,7 @@ class WebsocketProxy:
     async def connect(self) -> AsyncIterable[Response]:
         Websocket.connectors.setdefault(self.websocket.request.path, []).append(self.websocket)
         if self.app.sync_server_url and self.websocket.request.path not in static.websocket_sync_server:
-            static.websocket_sync_server[self.websocket.request.path] = redis.asyncio.Redis.from_url(self.app.sync_server_url)
+            static.websocket_sync_server[self.websocket.request.path] = redis.asyncio.Redis.from_url(self.app.sync_server_url, socket_timeout = self.app.sync_server_timeout, socket_connect_timeout = self.app.sync_server_timeout)
             asyncio.create_task(self.sync_server_running())
 
         loop = asyncio.get_running_loop()
@@ -250,7 +250,7 @@ class WebsocketProxy:
             if self.app.sync_server_url.startswith('redis'):
                 while True:
                     try:
-                        pubsub = static.websocket_sync_server[self.websocket.request.path].pubsub()
+                        pubsub = redis.asyncio.from_url(self.app.sync_server_url, socket_timeout = None, socket_connect_timeout = None).pubsub()
                         await pubsub.subscribe(self.websocket.request.path)
                         async for message in pubsub.listen():
                             if message['type'] != 'message':

@@ -334,7 +334,7 @@ class AppProxy:
     async def get_response(self, request: Request) -> Response:
         if inspect.isfunction(request.fn):
             try:
-                signature = inspect.signature(request.fn)
+                signature = inspect.signature(request.fn, follow_wrapped = False)
                 if 'request' in signature.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()):
                     return await request.fn(request = request)
                 else:
@@ -475,7 +475,7 @@ class AppProxy:
         if app.sync_server_url:
             static.websocket_sync_servers = (redis.ConnectionPool.from_url(app.sync_server_url, socket_timeout = app.sync_server_timeout, socket_connect_timeout = app.sync_server_timeout), redis.asyncio.ConnectionPool.from_url(app.sync_server_url, socket_timeout = app.sync_server_timeout, socket_connect_timeout = app.sync_server_timeout))
             static.websocket_sync_server = {}
-        app.scheduler._proxy.init(app)
+            static.scheduler_sync_servers = (redis.ConnectionPool.from_url(app.sync_server_url, socket_timeout = app.sync_server_timeout, socket_connect_timeout = app.sync_server_timeout), redis.asyncio.ConnectionPool.from_url(app.sync_server_url, socket_timeout = app.sync_server_timeout, socket_connect_timeout = app.sync_server_timeout))
 
 class CheeseAPI:
     __slots__ = ('_host', '_port', '_ipv6', '_logger_path', '_dual_stack', '_socket_backlog', '_socket_send_buffer_size', '_socket_receive_buffer_size', '_workers', '_ssl_cert', '_ssl_key', '_sync_server_url', '_static_path', '_printer', '_compress', '_compress_min_length', '_compress_level', '_manual_modules', '_exclude_modules', '_priority_modules', '_sync_server_data_encode', '_sync_server_data_decode', '_logger_messages', '_logger', '_is_running', '_request_timeout', '_keep_alive', '_keep_alive_timeout', '_keep_alive_max_requests', '_AppProxy_Class', '_RequestProxy_Class', '_proxy', '_signal', '_ResponseProxy_Class', '_RouteProxy_Class', '_route', '_WebsocketProxy_Class', '_cors', '_SchedulerProxy_Class', '_scheduler', '_sync_server_timeout')

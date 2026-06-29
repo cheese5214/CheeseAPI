@@ -57,7 +57,7 @@ def validator(*, json_model: pydantic.BaseModel | None = None, form_model: pydan
                 else:
                     return Response(json.loads(e.json()), 400)
 
-            signature = inspect.signature(fn)
+            signature = inspect.signature(fn, follow_wrapped = False)
             if 'request' in signature.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()):
                 return await fn(*args, request = request, **kwargs)
             else:

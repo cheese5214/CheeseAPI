@@ -1,4 +1,4 @@
-import inspect
+import inspect, os
 import datetime, uuid, threading, multiprocessing, asyncio, time, json
 from typing import Callable, Literal, TYPE_CHECKING
 
@@ -228,12 +228,13 @@ class Scheduler:
         return self._proxy.get_tasks()
 
 class SchedulerProxy:
-    __slots__ = ('app', '_tasks')
+    __slots__ = ('app', '_tasks', '_pubsub_ready')
 
     def __init__(self, app: 'CheeseAPI'):
         self.app: 'CheeseAPI' = app
 
         self._tasks: dict[str, Task] = {}
+        self._pubsub_ready: bool = False
 
     def __getstate__(self):
         return None, {
@@ -243,19 +244,7 @@ class SchedulerProxy:
     def __setstate__(self, state):
         self.app = state[1]['app']
         self._tasks = {}
-
-    def init(self, app = None):
-        if not app:
-            app = self.app
-
-        if app.sync_server_url:
-            static.scheduler_sync_servers = (redis.ConnectionPool.from_url(app.sync_server_url, socket_timeout = app.sync_server_timeout, socket_connect_timeout = app.sync_server_timeout), redis.asyncio.ConnectionPool.from_url(app.sync_server_url, socket_timeout = app.sync_server_timeout, socket_connect_timeout = app.sync_server_timeout))
-            threading.Thread(target = self._start_pubsub, args = (app,), daemon = True).start()
-            coro = self._async_start_pubsub(app)
-            try:
-                asyncio.create_task(coro)
-            except RuntimeError:
-                coro.close()
+        self._pubsub_ready = False
 
     def _start_pubsub(self, app: 'CheeseAPI'):
         try:
@@ -311,6 +300,15 @@ class SchedulerProxy:
 
     def add(self, interval_time: float, fn: Callable | None = None, *, first_run_timer: datetime.datetime | None = None, expected_run_num: int | None = None, key: str | None = None, run_type: Literal['THREAD', 'PROCESS'] = 'THREAD', args: tuple = (), kwargs: dict = {}, auto_remove: bool = False, timeout: float | None = None) -> Callable | Task:
         if fn:
+            if not self._pubsub_ready:
+                self._pubsub_ready = True
+                threading.Thread(target = self._start_pubsub, args = (self.app,), daemon = True).start()
+                coro = self._async_start_pubsub(self.app)
+                try:
+                    asyncio.create_task(coro)
+                except RuntimeError:
+                    coro.close()
+
             task = Task(fn, interval_time, first_run_timer = first_run_timer, expected_run_num = expected_run_num, key = key, run_type = run_type, args = args, kwargs = kwargs, auto_remove = auto_remove, timeout = timeout, _scheduler_proxy = self)
             task._queue.put(None)
 
@@ -331,6 +329,15 @@ class SchedulerProxy:
 
     async def async_add(self, interval_time: float | None = None, fn: Callable | None = None, *, first_run_timer: datetime.datetime | None = None, expected_run_num: int | None = None, key: str | None = None, args: tuple = (), kwargs: dict = {}, auto_remove: bool = False, timeout: float | None = None) -> Callable | Task:
         if fn is not None:
+            if not self._pubsub_ready:
+                self._pubsub_ready = True
+                threading.Thread(target = self._start_pubsub, args = (self.app,), daemon = True).start()
+                coro = self._async_start_pubsub(self.app)
+                try:
+                    asyncio.create_task(coro)
+                except RuntimeError:
+                    coro.close()
+
             task = Task(fn, interval_time = interval_time, first_run_timer = first_run_timer, expected_run_num = expected_run_num, key = key, run_type = 'ASYNC', args = args, kwargs = kwargs, auto_remove = auto_remove, timeout = timeout, _scheduler_proxy = self)
             task._queue.put(None)
 
@@ -349,13 +356,12 @@ class SchedulerProxy:
                 return _fn
             return wrapper
 
-    def task_processing(self, key: str, queue: multiprocessing.Queue, fn, *args, **kwargs):
+    def task_processing(self, task: Task, queue: multiprocessing.Queue, fn, *args, **kwargs):
         try:
             queue.get()
 
-            task = self.get_task(key)
             if static.scheduler_sync_servers:
-                task._queue.get()
+                self.get_task(task.key)._queue.get()
             if task.first_run_timer:
                 time.sleep(max(0, task.first_run_timer.timestamp() - time.time()))
 
@@ -372,21 +378,26 @@ class SchedulerProxy:
                 except Exception as e:
                     self.app.printer.scheduler_error(e, task)
 
+                if queue.qsize():
+                    break
+
                 task._last_run_time = time.time() - now
                 task._last_run_timer = datetime.datetime.fromtimestamp(now)
                 task._run_num += 1
 
                 if static.scheduler_sync_servers:
                     sync_server = redis.Redis(connection_pool = static.scheduler_sync_servers[0])
-                    sync_server.hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
-                    sync_server.hpexpire('CheeseAPI_scheduler_tasks', int(task.timeout * 1000), key)
+                    sync_server.hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
+                    sync_server.hpexpire('CheeseAPI_scheduler_tasks', int(task.timeout * 1000), task.key)
 
                 time.sleep(max(0, task.interval_time - time.time() + now))
         except (KeyboardInterrupt, SystemExit):
             ...
 
-        if static.scheduler_sync_servers and task:
-            redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hpersist('CheeseAPI_scheduler_tasks', key)
+        if static.scheduler_sync_servers:
+            _redis = redis.Redis(connection_pool = static.scheduler_sync_servers[0])
+            if _redis.hexists('CheeseAPI_scheduler_tasks', task.key):
+                _redis.hpersist('CheeseAPI_scheduler_tasks', task.key)
 
     async def async_task_processing(self, key: str, queue: multiprocessing.Queue, fn, *args, **kwargs):
         queue.get()
@@ -410,6 +421,9 @@ class SchedulerProxy:
             except Exception as e:
                 self.app.printer.scheduler_error(e, task)
 
+            if queue.qsize():
+                break
+
             task._last_run_time = time.time() - now
             task._last_run_timer = datetime.datetime.fromtimestamp(now)
             task._run_num += 1
@@ -429,8 +443,10 @@ class SchedulerProxy:
             if static.scheduler_sync_servers is not None:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)
         else:
-            if static.scheduler_sync_servers is not None:
-                await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hpersist('CheeseAPI_scheduler_tasks', key)
+            if static.scheduler_sync_servers:
+                _redis = redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1])
+                if await _redis.hexists('CheeseAPI_scheduler_tasks', key):
+                    await _redis.hpersist('CheeseAPI_scheduler_tasks', key)
 
     def join(self, task: Task):
         if task.run_type == 'THREAD' and isinstance(task._handler, threading.Thread):
@@ -454,9 +470,9 @@ class SchedulerProxy:
             return
 
         if task.run_type == 'THREAD':
-            task._handler = threading.Thread(target = self.task_processing, args = (key, task._queue, task.fn, *task.args), kwargs = task.kwargs, daemon = True)
+            task._handler = threading.Thread(target = self.task_processing, args = (task, task._queue, task.fn, *task.args), kwargs = task.kwargs, daemon = True)
         elif task.run_type == 'PROCESS':
-            task._handler = multiprocessing.get_context('spawn').Process(target = self.task_processing, args = (key, task._queue, task.fn, *task.args), kwargs = task.kwargs, daemon = True)
+            task._handler = multiprocessing.get_context('spawn').Process(target = self.task_processing, args = (task, task._queue, task.fn, *task.args), kwargs = task.kwargs, daemon = True)
         task._handler.start()
 
         if task.auto_remove:
@@ -568,7 +584,7 @@ class SchedulerProxy:
     async def async_get_tasks(self) -> dict[str, Task]:
         if static.scheduler_sync_servers is not None:
             return {
-                key: Task.from_dict(json.loads(data), self) for key, data in (await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hgetall('CheeseAPI_scheduler_tasks')).items()
+                key.decode(): Task.from_dict(json.loads(data), self) for key, data in (await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hgetall('CheeseAPI_scheduler_tasks')).items()
             }
 
         return self._tasks
