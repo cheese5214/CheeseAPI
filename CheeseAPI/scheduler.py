@@ -300,7 +300,7 @@ class SchedulerProxy:
 
     def add(self, interval_time: float, fn: Callable | None = None, *, first_run_timer: datetime.datetime | None = None, expected_run_num: int | None = None, key: str | None = None, run_type: Literal['THREAD', 'PROCESS'] = 'THREAD', args: tuple = (), kwargs: dict = {}, auto_remove: bool = False, timeout: float | None = None) -> Callable | Task:
         if fn:
-            if not self._pubsub_ready:
+            if self.app.sync_server_url and not self._pubsub_ready:
                 self._pubsub_ready = True
                 threading.Thread(target = self._start_pubsub, args = (self.app,), daemon = True).start()
                 coro = self._async_start_pubsub(self.app)
@@ -329,7 +329,7 @@ class SchedulerProxy:
 
     async def async_add(self, interval_time: float | None = None, fn: Callable | None = None, *, first_run_timer: datetime.datetime | None = None, expected_run_num: int | None = None, key: str | None = None, args: tuple = (), kwargs: dict = {}, auto_remove: bool = False, timeout: float | None = None) -> Callable | Task:
         if fn is not None:
-            if not self._pubsub_ready:
+            if self.app.sync_server_url and not self._pubsub_ready:
                 self._pubsub_ready = True
                 threading.Thread(target = self._start_pubsub, args = (self.app,), daemon = True).start()
                 coro = self._async_start_pubsub(self.app)
