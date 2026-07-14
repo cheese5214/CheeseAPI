@@ -150,7 +150,7 @@ class AppRoute(Route):
         self._routes: dict[str, dict[HTTP_METHOD_TYPE, RouteDict]] = {}
         self._patterns: list[Pattern] = [
             {
-                'pattern': re.compile(r'-?(0|[1-9]\d*)'),
+                'pattern': re.compile(r'-?(?:0|[1-9]\d*)'),
                 'weight': 5,
                 'type': int,
                 'key': 'int'
