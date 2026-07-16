@@ -112,11 +112,17 @@ class WebsocketProxy:
     @staticmethod
     def _static_send(path: str, data: bytes | list | str | dict, *, websocket_key_or_keys: str | list[str] | None = None):
         if static.websocket_sync_servers is not None:
-            data = json.dumps({
-                'data': data,
-                'key': websocket_key_or_keys,
-                'event': 'send'
-            }).encode()
+            if isinstance(data, bytes):
+                data = b'\x01' + json.dumps({
+                    'key': websocket_key_or_keys,
+                    'event': 'send'
+                }).encode() + b'\x00' + data
+            else:
+                data = b'\x00' + json.dumps({
+                    'data': data,
+                    'key': websocket_key_or_keys,
+                    'event': 'send'
+                }).encode()
             if static.websocket_data_encode is not None:
                 data = static.websocket_data_encode(data)
             redis.Redis(connection_pool = static.websocket_sync_servers[0]).publish(path, data)
@@ -137,11 +143,18 @@ class WebsocketProxy:
     @staticmethod
     async def async_send(path: str, data: bytes | list | str | dict, *, websocket_key_or_keys: str | list[str] | None = None):
         if static.websocket_sync_servers is not None:
-            data = json.dumps({
-                'data': data,
-                'key': websocket_key_or_keys,
-                'event': 'send'
-            }).encode()
+            if isinstance(data, bytes):
+                header = json.dumps({
+                    'key': websocket_key_or_keys,
+                    'event': 'send'
+                }).encode()
+                data = b'\x01' + header + b'\x00' + data
+            else:
+                data = b'\x00' + json.dumps({
+                    'data': data,
+                    'key': websocket_key_or_keys,
+                    'event': 'send'
+                }).encode()
             if static.websocket_data_encode is not None:
                 data = static.websocket_data_encode(data)
             await redis.asyncio.Redis(connection_pool = static.websocket_sync_servers[1]).publish(path, data)
@@ -157,7 +170,7 @@ class WebsocketProxy:
     @staticmethod
     def _static_close(path: str, code: int = 1000, message: str = '', *, websocket_key_or_keys: str | list[str] | None = None):
         if static.websocket_sync_servers is not None:
-            data = json.dumps({
+            data = b'\x00' + json.dumps({
                 'key': websocket_key_or_keys,
                 'event': 'close'
             }).encode()
@@ -181,7 +194,7 @@ class WebsocketProxy:
     @staticmethod
     async def async_close(path: str, code: int = 1000, message: str = '', *, websocket_key_or_keys: str | list[str] | None = None):
         if static.websocket_sync_servers is not None:
-            data = json.dumps({
+            data = b'\x00' + json.dumps({
                 'key': websocket_key_or_keys,
                 'event': 'close'
             }).encode()
@@ -263,7 +276,14 @@ class WebsocketProxy:
                             message = message['data']
                             if static.websocket_data_decode is not None:
                                 message = static.websocket_data_decode(message)
-                            message = json.loads(message.decode())
+                            msg_type = message[0]
+                            if msg_type == 0:
+                                message = json.loads(message[1:].decode())
+                                _data = message.get('data')
+                            else:
+                                sep = message.index(b'\x00', 1)
+                                _data = message[sep + 1:]
+                                message = json.loads(message[1:sep].decode())
                             if isinstance(message['key'], list):
                                 connectors = [connector for connector in connectors if connector.key in message['key']]
                             elif isinstance(message['key'], str):
@@ -274,7 +294,7 @@ class WebsocketProxy:
                             if connectors:
                                 if message['event'] == 'send':
                                     for connector in connectors:
-                                        asyncio.create_task(connector.send(message['data']))
+                                        asyncio.create_task(connector.send(_data))
                                 elif message['event'] == 'close':
                                     for connector in connectors:
                                         asyncio.create_task(connector.close())
