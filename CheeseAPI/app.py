@@ -361,7 +361,7 @@ class AppProxy:
                     'request': request
                 })
 
-                if request._proxy.protocol is None or not self.app.keep_alive or (request._proxy.protocol == 'HTTP/1.0' and request.headers.get('Connection') != 'keep-alive') or (request._proxy.protocol == 'HTTP/1.1' and request.headers.get('Connection') == 'close'):
+                if request._proxy.protocol is None or not self.app.keep_alive or (request._proxy.protocol == 'HTTP/1.0' and request.headers.get('connection') != 'keep-alive') or (request._proxy.protocol == 'HTTP/1.1' and request.headers.get('connection') == 'close'):
                     break
 
             client_socket, addr = await self.before_request(client_socket, addr)

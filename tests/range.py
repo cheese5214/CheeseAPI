@@ -13,8 +13,8 @@ if __name__ == '__main__':
     threading.Thread(target = app.start, daemon = True).start()
 
     print(requests.get('http://0.0.0.0:5214/static/file.jpeg', headers = {
-        'Range': 'bytes=0-1023'
+        'range': 'bytes=0-1023'
     }).content)
     print(requests.get('http://0.0.0.0:5214/static/file.jpeg', headers = {
-        'Range': 'bytes=0-63,128-191'
+        'range': 'bytes=0-63,128-191'
     }).content)

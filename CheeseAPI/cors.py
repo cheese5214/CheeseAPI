@@ -19,31 +19,31 @@ class CORS:
         self.max_age: int | None = max_age
 
     def get_response(self, request: 'Request'):
-        origin = request.headers.get('Origin', '')
+        origin = request.headers.get('origin', '')
         if '*' not in self.allow_origins and origin not in self.allow_origins:
             return Response(status = 403)
 
         headers = {}
 
         if origin in self.allow_origins:
-            headers['Access-Control-Allow-Origin'] = origin
+            headers['access-control-allow-origin'] = origin
         elif '*' in self.allow_origins and not self.allow_credentials:
-            headers['Access-Control-Allow-Origin'] = '*'
+            headers['access-control-allow-origin'] = '*'
 
-        headers['Access-Control-Allow-Methods'] = ', '.join(self.allow_methods)
+        headers['access-control-allow-methods'] = ', '.join(self.allow_methods)
 
         if '*' in self.allow_headers:
-            headers['Access-Control-Allow-Headers'] = request.headers.get('Access-Control-Request-Headers') or '*'
+            headers['access-control-allow-headers'] = request.headers.get('access-control-request-headers') or '*'
         else:
-            headers['Access-Control-Allow-Headers'] = ', '.join(self.allow_headers)
+            headers['access-control-allow-headers'] = ', '.join(self.allow_headers)
 
         if self.allow_credentials:
-            headers['Access-Control-Allow-Credentials'] = 'true'
+            headers['access-control-allow-credentials'] = 'true'
 
         if self.expose_headers:
-            headers['Access-Control-Expose-Headers'] = ', '.join(self.expose_headers)
+            headers['access-control-expose-headers'] = ', '.join(self.expose_headers)
 
         if self.max_age is not None:
-            headers['Access-Control-Max-Age'] = str(self.max_age)
+            headers['access-control-max-age'] = str(self.max_age)
 
         return Response(status = 204, headers = headers)

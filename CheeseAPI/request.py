@@ -150,34 +150,34 @@ class RequestProxy:
         self.request._headers = {}
         for line in lines[1:]:
             key, value = line.split(': ', 1)
-            self.request.headers[key] = value
+            self.request.headers[key.lower()] = value
 
-        if 'Cookie' in self.request.headers:
+        if 'cookie' in self.request.headers:
             self.request._cookies = {}
-            for cookie in self.request.headers['Cookie'].split(';'):
+            for cookie in self.request.headers['cookie'].split(';'):
                 key, value = cookie.strip().split('=', 1)
                 self.request.cookies[key] = value
 
-        if 'X-Real-IP' in self.request.headers:
-            self.request._ip = self.request.headers['X-Real-IP']
-        elif 'X-Forwarded-For' in self.request.headers:
-            self.request._ip = self.request.headers['X-Forwarded-For'].split(',')[0].strip()
+        if 'x-real-ip' in self.request.headers:
+            self.request._ip = self.request.headers['x-real-ip']
+        elif 'x-forwarded-for' in self.request.headers:
+            self.request._ip = self.request.headers['x-forwarded-for'].split(',')[0].strip()
 
-        if 'Range' in self.request.headers:
+        if 'range' in self.request.headers:
             self.request._ranges = []
-            for range_part in self.request.headers['Range'][6:].split(','):
+            for range_part in self.request.headers['range'][6:].split(','):
                 range_part = range_part.strip()
                 if '-' in range_part:
                     start, end = range_part.split('-', 1)
                     self.request.ranges.append((int(start) if start else 0, int(end) if end else None))
 
-        if 'Upgrade' in self.request.headers and self.request.headers['Upgrade'] == 'websocket':
+        if 'upgrade' in self.request.headers and self.request.headers['upgrade'] == 'websocket':
             self.request._method = 'WEBSOCKET'
 
     async def recv_body(self, get_all: bool = False) -> bool | Response | None:
         loop = asyncio.get_event_loop()
 
-        content_length = self.request.headers.get('Content-Length')
+        content_length = self.request.headers.get('content-length')
         if content_length:
             self.request._body = self.buffer
             self.buffer = b''
@@ -193,7 +193,7 @@ class RequestProxy:
                     raise ConnectionAbortedError()
             return True
 
-        is_chunked = self.request.headers.get('Transfer-Encoding') == 'chunked'
+        is_chunked = self.request.headers.get('transfer-encoding') == 'chunked'
         if is_chunked:
             if self.request._body is None:
                 self.request._body = b''
@@ -213,7 +213,7 @@ class RequestProxy:
                     return Response(status = 400)
 
                 if chunk_size == 0:
-                    if self.request.headers.get('Trailer'):
+                    if self.request.headers.get('trailer'):
                         while b'\r\n\r\n' not in self.buffer:
                             try:
                                 data = await asyncio.wait_for(loop.sock_recv(self.client_socket, self.app.socket_receive_buffer_size), self.app.request_timeout)
@@ -224,7 +224,7 @@ class RequestProxy:
                             self.buffer += data
 
                         trailer, self.buffer = self.buffer.split(b'\r\n\r\n', 1)
-                        if trailer and trailer.startswith('Content-MD5: ') and trailer[13:] not in (base64.b64encode(hashlib.md5(self.request._body).digest()).decode(), hashlib.md5(self.request._body).hexdigest()):
+                        if trailer and trailer.startswith('content-md5: ') and trailer[13:] not in (base64.b64encode(hashlib.md5(self.request._body).digest()).decode(), hashlib.md5(self.request._body).hexdigest()):
                             return Response(status = 400)
 
                     self.buffer = b''
@@ -246,7 +246,7 @@ class RequestProxy:
         if self.request.body is None:
             return
 
-        content_type = self.request.headers.get('Content-Type')
+        content_type = self.request.headers.get('content-type')
         if content_type == 'text/plain' or content_type is None:
             self.request._body = self.request.body.decode()
         elif content_type == 'application/json':
@@ -267,7 +267,7 @@ class RequestProxy:
                 name = None
                 filename = None
                 for line in headers.decode().strip().split('\r\n'):
-                    if line.startswith('Content-Disposition:'):
+                    if line.startswith('content-disposition:'):
                         name_match = re.search(r'name="([^"]*)"', line)
                         if name_match:
                             name = name_match.group(1)
@@ -287,7 +287,7 @@ class RequestProxy:
                             self.request._form = {}
                         self.request._form[name] = data.decode()
 
-        if self.request.headers.get('Content-Disposition'):
-            match = re.search(r'filename="([^"]*)"', self.request.headers['Content-Disposition'])
+        if self.request.headers.get('content-disposition'):
+            match = re.search(r'filename="([^"]*)"', self.request.headers['content-disposition'])
             if match:
                 self.request._file = File(match.group(1), self.request.body)

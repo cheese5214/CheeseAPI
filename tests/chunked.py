@@ -28,6 +28,6 @@ if __name__ == '__main__':
     threading.Thread(target = app.start, daemon = True).start()
 
     response = requests.post('http://0.0.0.0:5214/chunked', data = gen(), headers = {
-        'Transfer-Encoding': 'chunked'
+        'transfer-encoding': 'chunked'
     })
     print(response.text)

@@ -125,7 +125,7 @@ class RedirectResponse(Response):
     def __init__(self, location: str, status: Literal[301, 302, 303, 307, 308] = 302, headers: dict[str, str] | None = None, body: bytes | str | list | dict | None = None):
         if headers is None:
             headers = {}
-        headers['Location'] = location
+        headers['location'] = location
 
         super().__init__(status, body, headers)
 
@@ -173,14 +173,14 @@ class ResponseProxy:
         bytes.extend(['', ''])
         bytes = '\r\n'.join(bytes).encode()
         if not no_body:
-            if self.response.headers.get('Transfer-Encoding') == 'chunked':
+            if self.response.headers.get('transfer-encoding') == 'chunked':
                 bytes += hex(len(data)).encode() + b'\r\n' + data + b'\r\n'
             else:
                 bytes += data
         await loop.sock_sendall(client_socket, bytes)
 
         if not no_body:
-            if self.response.headers.get('Transfer-Encoding') == 'chunked':
+            if self.response.headers.get('transfer-encoding') == 'chunked':
                 async for _, _, data in gen:
                     await loop.sock_sendall(client_socket, hex(len(data)).encode() + b'\r\n' + data + b'\r\n')
                 await loop.sock_sendall(client_socket, b'0\r\n\r\n')
@@ -193,7 +193,7 @@ class ResponseProxy:
 
     async def get_status(self, status: int, headers: dict[str, str], body: dict | list | str | bytes | None) -> tuple[int, dict[str, str], dict | list | str | bytes | None]:
         if isinstance(self.response, FileResponse):
-            if self.request.headers.get('Range') is not None:
+            if self.request.headers.get('range') is not None:
                 max_range = -1
                 for range in self.request.ranges:
                     if range[1] is not None:
@@ -229,36 +229,36 @@ class ResponseProxy:
             elif self.response.transmission_type == 'CHUNKED':
                 body = self.file_response_chunked_body()
 
-            if 'Content-Type' not in headers and 'Content-Disposition' not in headers:
+            if 'content-type' not in headers and 'content-disposition' not in headers:
                 mime_type = mimetypes.guess_type(self.response.file.name)[0] or 'application/octet-stream'
                 if mime_type in MERGE_TYPES:
                     mime_type = MERGE_TYPES[mime_type]
-                headers['Content-Type'] = f'{mime_type}; charset=utf-8'
-                headers['Content-Disposition'] = f'{"inline" if self.response.preview and mime_type in PREVIEWABLE_TYPES else "attachment"}; filename="{self.response.file.name}"'
+                headers['content-type'] = f'{mime_type}; charset=utf-8'
+                headers['content-disposition'] = f'{"inline" if self.response.preview and mime_type in PREVIEWABLE_TYPES else "attachment"}; filename="{self.response.file.name}"'
 
         if isinstance(self.response.body, AsyncIterable):
-            if 'Transfer-Encoding' not in headers:
-                headers['Transfer-Encoding'] = 'chunked'
+            if 'transfer-encoding' not in headers:
+                headers['transfer-encoding'] = 'chunked'
 
-        if 'Date' not in headers:
+        if 'date' not in headers:
             now = datetime.datetime.now(datetime.timezone.utc)
-            headers['Date'] = (now.strftime('%a, %d %b %Y %H:%M:%S.') + f'{now.microsecond:06d} GMT') if self.response.high_precision_date else now.strftime('%a, %d %b %Y %H:%M:%S GMT')
+            headers['date'] = (now.strftime('%a, %d %b %Y %H:%M:%S.') + f'{now.microsecond:06d} GMT') if self.response.high_precision_date else now.strftime('%a, %d %b %Y %H:%M:%S GMT')
 
-        if 'Connection' not in headers:
-            if self.app.keep_alive and self.request and ((self.request._proxy.protocol == 'HTTP/1.1' and self.request.headers.get('Connection', '') != 'close') or (self.request._proxy.protocol == 'HTTP/1.0' and self.request.headers.get('Connection', '') == 'keep-alive')):
-                headers['Connection'] = 'keep-alive'
-                headers['Keep-Alive'] = f'timeout={self.app.keep_alive_timeout}, max={self.app.keep_alive_max_requests}'
+        if 'connection' not in headers:
+            if self.app.keep_alive and self.request and ((self.request._proxy.protocol == 'HTTP/1.1' and self.request.headers.get('connection', '') != 'close') or (self.request._proxy.protocol == 'HTTP/1.0' and self.request.headers.get('connection', '') == 'keep-alive')):
+                headers['connection'] = 'keep-alive'
+                headers['keep-alive'] = f'timeout={self.app.keep_alive_timeout}, max={self.app.keep_alive_max_requests}'
             else:
-                headers['Connection'] = 'close'
+                headers['connection'] = 'close'
 
         if self.request.ranges:
             if status == 206:
-                headers.setdefault('Accept-Ranges', 'bytes')
+                headers.setdefault('accept-ranges', 'bytes')
         else:
             encodings = []
             encoding_quality = False
-            if self.app.compress and self.request and self.request.headers and self.request.headers.get('Accept-Encoding'):
-                for encoding in self.request.headers.get('Accept-Encoding').split(','):
+            if self.app.compress and self.request and self.request.headers and self.request.headers.get('accept-encoding'):
+                for encoding in self.request.headers.get('accept-encoding').split(','):
                     encoding_split = encoding.strip().split(';')
                     if len(encoding_split) == 1:
                         encoding_split.append(1)
@@ -270,26 +270,26 @@ class ResponseProxy:
                 encodings = [encoding[0] for encoding in encodings]
 
             if self.response.compress is not None:
-                headers.setdefault('Content-Encoding', self.response.compress)
+                headers.setdefault('content-encoding', self.response.compress)
             elif encodings:
                 if encoding_quality is True:
                     for encoding in encodings:
                         if encoding in self.app.compress:
-                            headers.setdefault('Content-Encoding', encoding)
+                            headers.setdefault('content-encoding', encoding)
                             break
                         if encoding == '*':
-                            headers.setdefault('Content-Encoding', self.app.compress[0])
+                            headers.setdefault('content-encoding', self.app.compress[0])
                             break
                 else:
                     if encodings[0] == '*':
-                        headers.setdefault('Content-Encoding', self.app.compress[0])
+                        headers.setdefault('content-encoding', self.app.compress[0])
                     else:
                         for encoding in self.app.compress:
                             if encoding in encodings:
-                                headers.setdefault('Content-Encoding', encoding)
+                                headers.setdefault('content-encoding', encoding)
                                 break
 
-        if self.response.cookies and 'Set-Cookie' not in headers:
+        if self.response.cookies and 'set-cookie' not in headers:
             cookies = []
             for key, cookie in self.response.cookies.items():
                 _cookie = f'{key}={cookie["value"]}'
@@ -304,7 +304,7 @@ class ResponseProxy:
                 if cookie['http_only']:
                     _cookie += '; HttpOnly'
                 cookies.append(_cookie)
-            headers['Set-Cookie'] = ', '.join(cookies)
+            headers['set-cookie'] = ', '.join(cookies)
 
         return status, headers, body
 
@@ -321,13 +321,13 @@ class ResponseProxy:
                     handler.seek(self.request.ranges[0][0] or 0)
                     data = handler.read((self.request.ranges[0][1] or size) - (self.request.ranges[0][0]))
                     handler.close()
-                headers['Content-Length'] = str(len(data))
-                headers['Content-Range'] = f'bytes {self.request.ranges[0][0]}-{(self.request.ranges[0][1] or size) - 1}/{size}'
+                headers['content-length'] = str(len(data))
+                headers['content-range'] = f'bytes {self.request.ranges[0][0]}-{(self.request.ranges[0][1] or size) - 1}/{size}'
                 yield status, headers, data
             else:
                 boundary = uuid.uuid4().hex
-                content_type = headers['Content-Type']
-                headers['Content-Type'] = f'multipart/byteranges; boundary={boundary}'
+                content_type = headers['content-type']
+                headers['content-type'] = f'multipart/byteranges; boundary={boundary}'
                 if self.response.file._data is not None:
                     size = len(self.response.file.data)
                 else:
@@ -336,10 +336,10 @@ class ResponseProxy:
                 content_length = 0
                 for range in self.request.ranges:
                     content_length += 2 + 32 + 2 + 14 + len(content_type) + 2 + 21 + (1 if range[0] == 0 else int(math.log10(range[0]))) + 1 + 1 + int(math.log10(range[1] or size)) + 1 + 1 + int(math.log10(size)) + 1 + 4 + (range[1] or size) - range[0] + 1
-                headers['Content-Length'] = str(content_length)
+                headers['content-length'] = str(content_length)
 
                 for range in self.request.ranges:
-                    data = [b'--', boundary.encode(), b'\r\n', b'Content-Type: ', content_type.encode(), b'\r\n', b'Content-Range: bytes ', str(range[0]).encode(), b'-', str(range[1] or size).encode(), b'/', str(size).encode() + b'\r\n\r\n']
+                    data = [b'--', boundary.encode(), b'\r\n', b'content-type: ', content_type.encode(), b'\r\n', b'content-range: bytes ', str(range[0]).encode(), b'-', str(range[1] or size).encode(), b'/', str(size).encode() + b'\r\n\r\n']
                     if self.response.file._data is not None:
                         data.append(self.response.file.data[range[0]:range[1] or size + 1])
                     else:
@@ -357,22 +357,22 @@ class ResponseProxy:
 
             if isinstance(data, (dict, list)):
                 data = json.dumps(data).encode()
-                headers.setdefault('Content-Type', 'application/json; charset=utf-8')
+                headers.setdefault('content-type', 'application/json; charset=utf-8')
             elif isinstance(data, str):
                 data = data.encode()
-                headers.setdefault('Content-Type', 'text/plain; charset=utf-8')
+                headers.setdefault('content-type', 'text/plain; charset=utf-8')
             elif data is None:
                 data = HTTP_STATUS[status].encode()
-                headers.setdefault('Content-Type', 'text/plain; charset=utf-8')
+                headers.setdefault('content-type', 'text/plain; charset=utf-8')
             elif isinstance(data, bytes):
-                headers.setdefault('Content-Type', 'application/octet-stream; charset=utf-8')
+                headers.setdefault('content-type', 'application/octet-stream; charset=utf-8')
 
             if isinstance(body, AsyncIterable) is False:
-                headers['Content-Length'] = str(len(data))
+                headers['content-length'] = str(len(data))
 
             status, headers, data = await self.get_encode_body(status, headers, data)
             if isinstance(body, AsyncIterable) is False:
-                headers['Content-Length'] = str(len(data))
+                headers['content-length'] = str(len(data))
             yield status, headers, data
 
             if isinstance(body, AsyncIterable):
@@ -385,25 +385,25 @@ class ResponseProxy:
                     yield status, headers, data
 
     async def get_encode_body(self, status: int, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, str], bytes]:
-        content_length = headers.get('Content-Length')
+        content_length = headers.get('content-length')
         if content_length and int(content_length) < self.app.compress_min_length:
-            if 'Content-Encoding' in headers:
-                del headers['Content-Encoding']
+            if 'content-encoding' in headers:
+                del headers['content-encoding']
 
-        if 'Content-Encoding' in headers and 'Content-Length' in headers and (int(headers['Content-Length']) > self.app.compress_min_length or self.response.compress is not None):
+        if 'content-encoding' in headers and 'content-length' in headers and (int(headers['content-length']) > self.app.compress_min_length or self.response.compress is not None):
             compress_level = self.response.compress_level if self.response.compress_level is not None else self.app.compress_level
-            if headers['Content-Encoding'] == 'gzip':
+            if headers['content-encoding'] == 'gzip':
                 body = gzip.compress(body, compress_level)
-            elif headers['Content-Encoding'] == 'deflate':
+            elif headers['content-encoding'] == 'deflate':
                 body = zlib.compress(body, level = compress_level)
-            elif headers['Content-Encoding'] == 'br':
+            elif headers['content-encoding'] == 'br':
                 body = brotli.compress(body, quality = compress_level)
-            elif headers['Content-Encoding'] == 'zstd':
+            elif headers['content-encoding'] == 'zstd':
                 body = zstandard.ZstdCompressor(level = compress_level).compress(body)
 
-            headers['Content-Length'] = str(len(body))
+            headers['content-length'] = str(len(body))
         else:
-            if 'Content-Encoding' in headers:
-                del headers['Content-Encoding']
+            if 'content-encoding' in headers:
+                del headers['content-encoding']
 
         return status, headers, body

@@ -48,8 +48,8 @@ class Websocket:
         self._request: 'Request' = request
 
         self._proxy: 'WebsocketProxy' = request._proxy.app.WebsocketProxy_Class(request._proxy.app, self)
-        self._key: str = self.request.headers.get('Sec-WebSocket-Key')
-        subprotocols = self.request.headers.get('Sec-WebSocket-Protocol')
+        self._key: str = self.request.headers.get('sec-websocket-key')
+        subprotocols = self.request.headers.get('sec-websocket-protocol')
         self._subprotocols: list[str] | None = subprotocols.strip().split(',') if subprotocols else None
         self._subprotocol: str | None = None
         self.response: Response | None = None
@@ -227,15 +227,15 @@ class WebsocketProxy:
 
     async def get_response(self) -> Response:
         headers = {
-            'Upgrade': 'websocket',
-            'Connection': 'Upgrade',
-            'Sec-WebSocket-Accept': base64.b64encode(hashlib.sha1(f'{self.websocket.key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11'.encode('utf-8')).digest()).decode('utf-8')
+            'upgrade': 'websocket',
+            'connection': 'upgrade',
+            'sec-websocket-accept': base64.b64encode(hashlib.sha1(f'{self.websocket.key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11'.encode('utf-8')).digest()).decode('utf-8')
         }
         if self.websocket.subprotocols:
             subprotocol = await self.websocket.on_subprotocol(self.websocket.subprotocols)
             if subprotocol:
                 self.websocket._subprotocol = subprotocol
-                headers['Sec-WebSocket-Protocol'] = subprotocol
+                headers['sec-websocket-protocol'] = subprotocol
         response = self.app.ResponseProxy_Class(self.app, Response(status = 101, headers = headers)).response
         response._proxy.websocket = self.websocket
         return response
