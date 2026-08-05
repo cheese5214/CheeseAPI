@@ -267,7 +267,7 @@ class RequestProxy:
                 name = None
                 filename = None
                 for line in headers.decode().strip().split('\r\n'):
-                    if line.startswith('content-disposition:'):
+                    if line.startswith('Content-Disposition:'):
                         name_match = re.search(r'name="([^"]*)"', line)
                         if name_match:
                             name = name_match.group(1)

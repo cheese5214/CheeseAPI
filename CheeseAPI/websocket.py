@@ -48,8 +48,8 @@ class Websocket:
         self._request: 'Request' = request
 
         self._proxy: 'WebsocketProxy' = request._proxy.app.WebsocketProxy_Class(request._proxy.app, self)
-        self._key: str = self.request.headers.get('sec-websocket-key')
-        subprotocols = self.request.headers.get('sec-websocket-protocol')
+        self._key: str = self.request.headers.get('Sec-WebSocket-Key')
+        subprotocols = self.request.headers.get('Sec-WebSocket-Protocol')
         self._subprotocols: list[str] | None = subprotocols.strip().split(',') if subprotocols else None
         self._subprotocol: str | None = None
         self.response: Response | None = None
@@ -109,6 +109,8 @@ class Websocket:
     close = DualMethod(_static_close, _instance_close)
 
 class WebsocketProxy:
+    _sync_tasks: dict[str, asyncio.Task] = {}
+
     @staticmethod
     def _static_send(path: str, data: bytes | list | str | dict, *, websocket_key_or_keys: str | list[str] | None = None):
         if static.websocket_sync_servers is not None:
@@ -227,15 +229,15 @@ class WebsocketProxy:
 
     async def get_response(self) -> Response:
         headers = {
-            'upgrade': 'websocket',
-            'connection': 'upgrade',
-            'sec-websocket-accept': base64.b64encode(hashlib.sha1(f'{self.websocket.key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11'.encode('utf-8')).digest()).decode('utf-8')
+            'Upgrade': 'websocket',
+            'Connection': 'Upgrade',
+            'Sec-WebSocket-Accept': base64.b64encode(hashlib.sha1(f'{self.websocket.key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11'.encode('utf-8')).digest()).decode('utf-8')
         }
         if self.websocket.subprotocols:
             subprotocol = await self.websocket.on_subprotocol(self.websocket.subprotocols)
             if subprotocol:
                 self.websocket._subprotocol = subprotocol
-                headers['sec-websocket-protocol'] = subprotocol
+                headers['Sec-WebSocket-Protocol'] = subprotocol
         response = self.app.ResponseProxy_Class(self.app, Response(status = 101, headers = headers)).response
         response._proxy.websocket = self.websocket
         return response
@@ -244,7 +246,7 @@ class WebsocketProxy:
         Websocket.connectors.setdefault(self.websocket.request.path, []).append(self.websocket)
         if self.app.sync_server_url and self.websocket.request.path not in static.websocket_sync_server:
             static.websocket_sync_server[self.websocket.request.path] = redis.asyncio.Redis.from_url(self.app.sync_server_url, socket_timeout = self.app.sync_server_timeout, socket_connect_timeout = self.app.sync_server_timeout)
-            asyncio.create_task(self.sync_server_running())
+            WebsocketProxy._sync_tasks[self.websocket.request.path] = asyncio.create_task(self.sync_server_running())
 
         loop = asyncio.get_running_loop()
         self.reader = asyncio.StreamReader()
@@ -259,10 +261,18 @@ class WebsocketProxy:
         await self.websocket.on_connect()
 
     async def sync_server_running(self):
+        pubsub = None
         try:
             if self.app.sync_server_url.startswith('redis'):
                 while True:
                     try:
+                        if pubsub is not None:
+                            try:
+                                await pubsub.aclose()
+                            except Exception:
+                                pass
+                            pubsub = None
+
                         pubsub = redis.asyncio.from_url(self.app.sync_server_url, socket_timeout = None, socket_connect_timeout = None).pubsub()
                         await pubsub.subscribe(self.websocket.request.path)
                         async for message in pubsub.listen():
@@ -302,6 +312,13 @@ class WebsocketProxy:
                         await asyncio.sleep(self.app.sync_server_timeout)
         except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             ...
+        finally:
+            WebsocketProxy._sync_tasks.pop(self.websocket.request.path, None)
+            if pubsub is not None:
+                try:
+                    await pubsub.aclose()
+                except Exception:
+                    pass
 
     async def message(self):
         while True:
