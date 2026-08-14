@@ -1,4 +1,4 @@
-import base64, hashlib, asyncio, ssl, struct, json
+import base64, hashlib, asyncio, ssl, struct, json, inspect
 from functools import partial
 from typing import TYPE_CHECKING, AsyncIterable, Self
 
@@ -48,8 +48,8 @@ class Websocket:
         self._request: 'Request' = request
 
         self._proxy: 'WebsocketProxy' = request._proxy.app.WebsocketProxy_Class(request._proxy.app, self)
-        self._key: str = self.request.headers.get('Sec-WebSocket-Key')
-        subprotocols = self.request.headers.get('Sec-WebSocket-Protocol')
+        self._key: str = self.request.headers.get('sec-websocket-key') or self.request.headers.get('Sec-WebSocket-Key')
+        subprotocols = self.request.headers.get('sec-websocket-protocol') or self.request.headers.get('Sec-WebSocket-Protocol')
         self._subprotocols: list[str] | None = subprotocols.strip().split(',') if subprotocols else None
         self._subprotocol: str | None = None
         self.response: Response | None = None
@@ -225,7 +225,9 @@ class WebsocketProxy:
             await self.message()
             await self.disconnect()
         except Exception as e:
-            await self.app.printer.websocket_error(e, self.websocket)
+            result = self.app.printer.websocket_error(e, self.websocket)
+            if inspect.isawaitable(result):
+                await result
 
     async def get_response(self) -> Response:
         headers = {
