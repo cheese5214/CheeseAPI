@@ -112,6 +112,37 @@ class WebsocketProxy:
     _sync_tasks: dict[str, asyncio.Task] = {}
 
     @staticmethod
+    def _consume_exception(future: asyncio.Future):
+        ''' 消费投递结果的异常，避免出现 "exception was never retrieved" '''
+        if not future.cancelled():
+            future.exception()
+
+    @staticmethod
+    def _schedule(connector: Websocket, coroutine):
+        '''
+        同步入口（`_static_send` / `_static_close`）不能 await，将协程投递到连接所属的事件循环执行
+
+        既不能直接丢弃（会报 `coroutine ... was never awaited` 且消息实际发不出去），
+        也不能在调用方的循环里执行（连接的 writer 属于创建它的那个循环）
+        '''
+        loop: asyncio.AbstractEventLoop | None = connector._proxy._loop
+
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if loop is None:
+            coroutine.close()
+        elif current_loop is loop:
+            loop.create_task(coroutine)
+        elif loop.is_running():
+            ''' 调用方在其他线程 / 非协程上下文，线程安全地投递回该循环 '''
+            asyncio.run_coroutine_threadsafe(coroutine, loop).add_done_callback(WebsocketProxy._consume_exception)
+        else:
+            coroutine.close()
+
+    @staticmethod
     def _static_send(path: str, data: bytes | list | str | dict, *, websocket_key_or_keys: str | list[str] | None = None):
         if static.websocket_sync_servers is not None:
             if isinstance(data, bytes):
@@ -131,16 +162,16 @@ class WebsocketProxy:
         elif path in Websocket.connectors:
             if websocket_key_or_keys is None:
                 for connector in Websocket.connectors[path]:
-                    connector.send(data)
+                    WebsocketProxy._schedule(connector, connector.send(data))
             elif isinstance(websocket_key_or_keys, str):
                 for connector in Websocket.connectors[path]:
                     if connector.key == websocket_key_or_keys:
-                        connector.send(data)
+                        WebsocketProxy._schedule(connector, connector.send(data))
                         break
             elif isinstance(websocket_key_or_keys, list):
                 for connector in Websocket.connectors[path]:
                     if connector.key in websocket_key_or_keys:
-                        connector.send(data)
+                        WebsocketProxy._schedule(connector, connector.send(data))
 
     @staticmethod
     async def async_send(path: str, data: bytes | list | str | dict, *, websocket_key_or_keys: str | list[str] | None = None):
@@ -182,16 +213,16 @@ class WebsocketProxy:
         elif path in Websocket.connectors:
             if websocket_key_or_keys is None:
                 for connector in Websocket.connectors[path]:
-                    connector.close(code, message)
+                    WebsocketProxy._schedule(connector, connector.close(code, message))
             elif isinstance(websocket_key_or_keys, str):
                 for connector in Websocket.connectors[path]:
                     if connector.key == websocket_key_or_keys:
-                        connector.close(code, message)
+                        WebsocketProxy._schedule(connector, connector.close(code, message))
                         break
             elif isinstance(websocket_key_or_keys, list):
                 for connector in Websocket.connectors[path]:
                     if connector.key in websocket_key_or_keys:
-                        connector.close(code, message)
+                        WebsocketProxy._schedule(connector, connector.close(code, message))
 
     @staticmethod
     async def async_close(path: str, code: int = 1000, message: str = '', *, websocket_key_or_keys: str | list[str] | None = None):
@@ -218,16 +249,25 @@ class WebsocketProxy:
 
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._is_disconnected: bool = False
 
     async def running(self) -> AsyncIterable[Response]:
         try:
             await self.connect()
             await self.message()
-            await self.disconnect()
         except Exception as e:
             result = self.app.printer.websocket_error(e, self.websocket)
             if inspect.isawaitable(result):
                 await result
+        finally:
+            ''' 无论连接、接收如何结束（含异常断连），都必须执行一次清理，否则心跳与推送任务不会停止 '''
+            try:
+                await self.disconnect()
+            except Exception as e:
+                result = self.app.printer.websocket_error(e, self.websocket)
+                if inspect.isawaitable(result):
+                    await result
 
     async def get_response(self) -> Response:
         headers = {
@@ -251,6 +291,7 @@ class WebsocketProxy:
             WebsocketProxy._sync_tasks[self.websocket.request.path] = asyncio.create_task(self.sync_server_running())
 
         loop = asyncio.get_running_loop()
+        self._loop = loop
         self.reader = asyncio.StreamReader()
         protocol = asyncio.StreamReaderProtocol(self.reader)
         if isinstance(self.websocket.request._proxy.client_socket, ssl.SSLSocket):
@@ -346,13 +387,52 @@ class WebsocketProxy:
                 await self.websocket.on_pong()
 
     async def disconnect(self):
+        '''
+        清理连接
+
+        - 允许重复调用：接收、发送两侧可能同时发现断连，重复清理直接返回
+        - 兼容连接未完全建立的情况：reader / writer 可能为 None，也未加入 connectors
+        - 保证执行 on_disconnect()：心跳任务与业务推送任务依赖它停止
+        - 用 finally 保证底层连接关闭，即使回调清理报错也要关闭
+        '''
+        if self._is_disconnected:
+            return
+        self._is_disconnected = True
+
         self.websocket._is_running = False
-        Websocket.connectors[self.websocket.request.path].remove(self.websocket)
-        self.app.printer.websocket_disconnect(self.websocket)
-        await self.websocket.on_disconnect()
-        if self.writer:
-            self.writer.close()
-            await self.writer.wait_closed()
+
+        connectors = Websocket.connectors.get(self.websocket.request.path)
+        if connectors is not None:
+            try:
+                connectors.remove(self.websocket)
+            except ValueError:
+                ...
+
+        try:
+            self.app.printer.websocket_disconnect(self.websocket)
+        except Exception:
+            ...
+
+        try:
+            await self.websocket.on_disconnect()
+        except Exception as e:
+            result = self.app.printer.websocket_error(e, self.websocket)
+            if inspect.isawaitable(result):
+                await result
+        finally:
+            writer, self.writer = self.writer, None
+            self.reader = None
+
+            if writer is not None:
+                try:
+                    writer.close()
+                except Exception:
+                    ...
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    ''' 对端已断开时 wait_closed 可能再报 OSError，属于预期错误，不能中断清理 '''
+                    ...
 
     def encode(self, opcode: int, data: bytes) -> bytes:
         _bytes = bytearray()
@@ -406,23 +486,51 @@ class WebsocketProxy:
         except asyncio.TimeoutError:
             return opcode, full_payload
 
+    def _check_running(self):
+        ''' 发送前的连接校验，连接已断开或未建立时直接拒绝，避免继续向坏连接写入 '''
+        if self._is_disconnected or self.writer is None or not self.websocket._is_running:
+            raise ConnectionError('The websocket is disconnected, data will not be sent')
+
+    def _disconnected(self, e: Exception) -> ConnectionError:
+        ''' 标记连接断开并返回统一的异常，阻止后续继续向坏连接发送 '''
+        self.websocket._is_running = False
+        self._is_disconnected = True
+        return ConnectionError('The websocket is disconnected, data will not be sent')
+
     async def _instance_send(self, data: bytes | list | str | dict, **kwargs):
-        if isinstance(data, str):
-            self.writer.write(self.encode(0x1, data.encode()))
-        elif isinstance(data, bytes):
-            self.writer.write(self.encode(0x2, data))
-        else:
-            self.writer.write(self.encode(0x1, json.dumps(data).encode()))
-        await self.writer.drain()
+        self._check_running()
+        try:
+            if isinstance(data, str):
+                self.writer.write(self.encode(0x1, data.encode()))
+            elif isinstance(data, bytes):
+                self.writer.write(self.encode(0x2, data))
+            else:
+                self.writer.write(self.encode(0x1, json.dumps(data).encode()))
+            await self.writer.drain()
+        except (ConnectionError, OSError, RuntimeError) as e:
+            raise self._disconnected(e) from e
 
     async def _instance_close(self, code: int = 1000, message: str = ''):
-        self.writer.write(self.encode(0x8, struct.pack('!H', code) + message.encode('utf-8')))
-        await self.writer.drain()
+        if self._is_disconnected or self.writer is None:
+            return
+        try:
+            self.writer.write(self.encode(0x8, struct.pack('!H', code) + message.encode('utf-8')))
+            await self.writer.drain()
+        except (ConnectionError, OSError, RuntimeError) as e:
+            raise self._disconnected(e) from e
 
     async def ping(self):
-        self.writer.write(self.encode(0x9, b''))
-        await self.writer.drain()
+        self._check_running()
+        try:
+            self.writer.write(self.encode(0x9, b''))
+            await self.writer.drain()
+        except (ConnectionError, OSError, RuntimeError) as e:
+            raise self._disconnected(e) from e
 
     async def pong(self):
-        self.writer.write(self.encode(0xA, b''))
-        await self.writer.drain()
+        self._check_running()
+        try:
+            self.writer.write(self.encode(0xA, b''))
+            await self.writer.drain()
+        except (ConnectionError, OSError, RuntimeError) as e:
+            raise self._disconnected(e) from e

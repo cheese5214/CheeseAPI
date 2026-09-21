@@ -12,6 +12,9 @@ if TYPE_CHECKING:
 
 HTTP_STATUS_COLOR: tuple[str] = ('blue', 'green', 'cyan', 'yellow', 'red')
 
+MAX_ERROR_LINES: int = 50
+''' 单条错误日志中堆栈的最大行数；超出部分会被截断，避免异常堆栈无限增长 '''
+
 class Printer:
     __slots__ = ('_app', '_progress_bar')
 
@@ -33,8 +36,19 @@ class Printer:
     def server_start(self):
         self.app.logger.print('START', f'CheeseAPI is running on {self.app.host}:{self.app.port}', f'CheeseAPI is running on <cyan>{self.app.host}:{self.app.port}</cyan>')
 
+    def _error(self) -> str:
+        '''
+        格式化当前异常的堆栈
+
+        限制最大行数，避免反复报错时堆栈越来越长把日志写爆
+        '''
+        lines = traceback.format_exc()[:-1].splitlines()
+        if len(lines) > MAX_ERROR_LINES:
+            lines = lines[:MAX_ERROR_LINES] + [f'... truncated {len(lines) - MAX_ERROR_LINES} lines ...']
+        return '\n'.join(lines).replace('\n', '\n    ')
+
     def app_error(self, e: Exception):
-        error = traceback.format_exc()[:-1].replace("\n", "\n    ")
+        error = self._error()
         self.app.logger.error(f'An error occurred causing the server to stop:\n    {error}', f'An error occurred causing the server to stop:\n    {self.app.logger.encode(error)}')
 
     def server_stop(self):
@@ -44,11 +58,11 @@ class Printer:
         self.app.logger.print('STOP', 'CheeseAPI has stopped')
 
     def fn_error(self, e: Exception, request: 'Request'):
-        error = traceback.format_exc()[:-1].replace("\n", "\n    ")
+        error = self._error()
         self.app.logger.danger(f'An error occurred causing the {request.ip} visited {request.method} {request.full_path}:\n    {error}', f'An error occurred causing the <cyan>{request.ip}</cyan> visited <cyan>{request.method} {self.app.logger.encode(request.full_path)}</cyan>:\n    {self.app.logger.encode(error)}')
 
     def websocket_error(self, e: Exception, websocket: 'Websocket'):
-        error = traceback.format_exc()[:-1].replace("\n", "\n    ")
+        error = self._error()
         self.app.logger.danger(f'An error occurred causing the {websocket.request.ip} disconnected  {websocket.request.method} {websocket.request.full_path}:\n    {error}', f'An error occurred causing the <cyan>{websocket.request.ip}</cyan> disconnected <cyan>{websocket.request.method} {self.app.logger.encode(websocket.request.full_path)}</cyan>:\n    {self.app.logger.encode(error)}')
 
     def response(self, request: 'Request', response: 'Response'):
@@ -65,11 +79,11 @@ class Printer:
         self.app.logger.print('WEBSOCKET', f'The {websocket.request.ip} disconnected {websocket.request.method} {websocket.request.full_path}', f'The <cyan>{websocket.request.ip}</cyan> disconnected <cyan>{websocket.request.method} {self.app.logger.encode(websocket.request.full_path)}</cyan>')
 
     def websocket_message_error(self, e: Exception, websocket: 'Websocket'):
-        error = traceback.format_exc()[:-1].replace("\n", "\n    ")
+        error = self._error()
         self.app.logger.danger(f'An error occurred causing the {websocket.request.ip} received a message to {websocket.request.method} {websocket.request.full_path}:\n    {error}', f'An error occurred causing the <cyan>{websocket.request.ip}</cyan> receive a message to <cyan>{websocket.request.method} {self.app.logger.encode(websocket.request.full_path)}</cyan>:\n    {self.app.logger.encode(error)}')
 
     def scheduler_error(self, e: Exception, task: 'Task'):
-        error = traceback.format_exc()[:-1].replace("\n", "\n    ")
+        error = self._error()
         self.app.logger.danger(f'An error occurred in the scheduled task {task.key} running:\n    {error}', f'An error occurred in the scheduled task running <green>{self.app.logger.encode(task.key)}</green>:\n    {self.app.logger.encode(error)}')
 
     @property
