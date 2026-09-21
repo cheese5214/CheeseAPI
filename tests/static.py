@@ -129,10 +129,10 @@ def case_traversal_blocked(t, server):
 
 def case_traversal_prefix_bypass(t, server):
     '''
-    前缀校验绕过：`static_path` 的兄弟目录（名字以静态根路径为前缀）本不该被访问
+    前缀校验绕过：`static_path` 的兄弟目录（名字以静态根路径为前缀）不可访问
 
-    `app.py` 用 `abspath(path).startswith(abspath(static_root))` 判断越界，
-    前缀匹配不是路径边界匹配，兄弟目录 `/tmp/xxx_secret` 会被判为「在根内」而直接放行。
+    `app.py` 以路径边界（`static_root + os.sep`）判断越界，而不是字符串前缀，
+    因此兄弟目录 `/tmp/xxx_secret` 会被判为「在根之外」而拒绝。
     '''
     paths = requests.get(f'{server.url}/paths').json()
     secret = paths['secret']
@@ -140,10 +140,10 @@ def case_traversal_prefix_bypass(t, server):
     relative = secret[len('/tmp/'):]
     status_line, _, body = raw_get(server.port, f'/extra/../{relative}/secret.txt')
 
-    t.known_issue(
+    t.check(
         'static 穿越：同名前缀的兄弟目录不可访问',
-        status_code(status_line) != 200,
-        f'{status_line!r}, body={body[:40]!r}（{secret} 在静态根之外，却被当作根内文件返回）'
+        status_code(status_line) != 200 and b'SECRET' not in body,
+        f'{status_line!r}, body={body[:40]!r}（{secret} 在静态根之外）'
     )
 
 CASES = [

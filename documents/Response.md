@@ -46,6 +46,12 @@ from CheeseAPI import Response
 
 ## **`class RedirectResponse(Response)`**
 
+既可从 `CheeseAPI.response` 导入，也可从 `CheeseAPI` 顶层导入：
+
+```python
+from CheeseAPI import RedirectResponse
+```
+
 ### **`def __init__(self, location: str, status: Literal[301, 302, 303, 307, 308] = 302, headers: dict[str, str] = {}, body: bytes | str | list | dict | None = None)`**
 
 ## **`class FileResponse(Response)`**

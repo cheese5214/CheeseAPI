@@ -1,9 +1,10 @@
 '''
 CORS 域：简单请求 / 预检请求的跨域响应头，应用级与路由级配置
 
-框架里 CORS 只挂在「方法不匹配（405）」分支上（`CheeseAPI/app.py` 的 `get_cors_response`），
-而该函数内部又用同一个 `method` 重新查一次路由，结果必然还是 405，于是直接返回一个裸的 `405`——
-`CORS.get_response` 在任何请求下都走不到。因此这里分两层验证：
+框架里 CORS 有两个入口：预检请求（`OPTIONS` + `Origin` + `Access-Control-Request-Method`）
+走 `CheeseAPI/app.py` 的 `get_cors_response`（路由级配置优先、否则回退应用级），
+简单请求（带 `Origin` 的普通方法）由 `attach_cors_headers` 把 CORS 头并入路由响应。
+因此这里分两层验证：
 
 1. 集成层：跨域请求（预检、简单请求）实际收到的响应头 —— 用 `requests` 直接发
 2. 判定层：`CORS.get_response` 的判定结果 —— 由 `apps/cors.py` 的 `/cors/echo/*` 路由回显
@@ -38,16 +39,13 @@ def case_preflight(t, server):
     })
     headers = cors_headers(response)
 
-    t.check('预检（应用级）：当前实现返回 405 且正文为 Method Not Allowed', response.status_code == 405 and response.text == 'Method Not Allowed', f'status={response.status_code}, body={response.text!r}')
-    t.check('预检（应用级）：当前实现不返回任何 access-control-* 头', headers == {}, headers)
-    t.known_issue('预检（应用级）：应返回 204 并带上 CORS 头', response.status_code == 204 and response.headers.get('access-control-allow-origin') == ALLOWED and response.headers.get('access-control-allow-methods') == 'GET, POST' and response.headers.get('access-control-allow-headers') == 'X-App-Header' and response.headers.get('access-control-max-age') == '600', f'status={response.status_code}, {headers}')
+    t.check('预检（应用级）：返回 204 并带上应用级 CORS 头', response.status_code == 204 and response.headers.get('access-control-allow-origin') == ALLOWED and response.headers.get('access-control-allow-methods') == 'GET, POST' and response.headers.get('access-control-allow-headers') == 'X-App-Header' and response.headers.get('access-control-max-age') == '600', f'status={response.status_code}, {headers}')
 
     response = requests.options(f'{server.url}/cors/route-level', headers = {
         'origin': ROUTE,
         'access-control-request-method': 'PATCH'
     })
-    t.check('预检（路由级）：当前实现返回 405', response.status_code == 405, f'status={response.status_code}')
-    t.known_issue('预检（路由级）：应返回 204 并使用路由级 CORS 配置', response.status_code == 204 and response.headers.get('access-control-allow-origin') == ROUTE and response.headers.get('access-control-allow-methods') == 'GET, PATCH' and response.headers.get('access-control-max-age') == '99', f'status={response.status_code}, {cors_headers(response)}')
+    t.check('预检（路由级）：返回 204 并使用路由级 CORS 配置', response.status_code == 204 and response.headers.get('access-control-allow-origin') == ROUTE and response.headers.get('access-control-allow-methods') == 'GET, PATCH' and response.headers.get('access-control-max-age') == '99', f'status={response.status_code}, {cors_headers(response)}')
 
     response = requests.options(f'{server.url}/cors/missing', headers = {
         'origin': ALLOWED,
@@ -55,17 +53,19 @@ def case_preflight(t, server):
     })
     t.check('预检：路径不存在时返回 404 且无 CORS 头', response.status_code == 404 and cors_headers(response) == {}, f'status={response.status_code}, {cors_headers(response)}')
 
+    response = requests.options(f'{server.url}/cors/app-only', headers = {'origin': ALLOWED})
+    t.check('预检：缺少 access-control-request-method 时不当作预检，仍是裸 405', response.status_code == 405 and cors_headers(response) == {}, f'status={response.status_code}, {cors_headers(response)}')
+
 def case_simple_request(t, server):
     ''' 简单请求：`GET` + `Origin` '''
     response = requests.get(f'{server.url}/cors/plain', headers = {'origin': ALLOWED})
     headers = cors_headers(response)
 
     t.check('简单请求：路由正常执行并返回正文', response.status_code == 200 and response.text == 'plain', f'status={response.status_code}, body={response.text!r}')
-    t.check('简单请求：当前实现不返回任何 access-control-* 头', headers == {}, headers)
-    t.known_issue('简单请求：应返回 access-control-allow-origin', response.headers.get('access-control-allow-origin') in (ALLOWED, '*'), f'{headers}')
+    t.check('简单请求：返回 access-control-allow-origin', response.headers.get('access-control-allow-origin') in (ALLOWED, '*'), f'{headers}')
 
     response = requests.get(f'{server.url}/cors/app-only', headers = {'origin': OTHER})
-    t.check('简单请求：白名单外来源同样只拿到普通响应（白名单未参与判定）', response.status_code == 200 and cors_headers(response) == {}, f'status={response.status_code}, {cors_headers(response)}')
+    t.check('简单请求：白名单外来源只拿到普通响应，不附加 CORS 头', response.status_code == 200 and cors_headers(response) == {}, f'status={response.status_code}, {cors_headers(response)}')
 
 #### 判定层 ####
 
@@ -111,7 +111,7 @@ def case_logic_wildcard(t, server):
 
     result = echo(server, '/cors/echo/wildcard-credentials', OTHER)
     t.check('CORS 通配：携带凭证时输出 access-control-allow-credentials', result['headers'].get('access-control-allow-credentials') == 'true', result['headers'])
-    t.known_issue('CORS 通配：携带凭证时应回显具体 origin（规范禁止 * 与凭证同用）', result['headers'].get('access-control-allow-origin') == OTHER, f'实际无 allow-origin 头：{result["headers"]}')
+    t.check('CORS 通配：携带凭证时回显具体 origin（规范禁止 * 与凭证同用）', result['headers'].get('access-control-allow-origin') == OTHER, f'{result["headers"]}')
 
 def case_logic_any_header(t, server):
     ''' `allow_headers=['*']` 时回显请求头 '''

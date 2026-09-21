@@ -1,8 +1,11 @@
 '''
 定时任务测试应用
 
-任务执行次数通过 `STATE`（线程 / 协程任务）传给测试进程；进程任务（`spawn` 子进程会重新执行本文件，
-重建 `AppState` 会把状态文件重置）的计数单独存一个文件。
+任务执行次数通过文件传给测试进程：每个任务（`tag`）单独一个记录文件，避免多个常驻任务
+共用一个状态文件时互相覆盖（`STATE` 写法会整体重写文件，并发执行时会丢掉别的任务的计数）；
+进程任务在 `spawn` 子进程里也会重建本模块，同样只能靠文件传递。
+
+每个任务函数都接受一个可选的 `tag` 参数（由路由的 `tag` 查询参数经 `args` 传入）。
 
 其余可观测状态（任务注册表、运行次数、是否在运行……）全部通过 HTTP 路由暴露。
 '''
@@ -10,7 +13,7 @@ from apputils import AppState, capture_warnings
 
 capture_warnings()
 
-import multiprocessing, os, sys
+import os, sys
 
 # 本文件位于 `apps/` 目录，脚本目录会被放进 `sys.path[0]`，与其他域的同名文件（如 `signal.py`）冲突，
 # 这里统一把脚本目录移出 `sys.path`
@@ -21,27 +24,44 @@ from CheeseAPI import CheeseAPI, Response
 
 STATE = AppState(thread_runs = 0, async_runs = 0)
 
+RUNS_PATH = os.environ['CHEESE_TEST_STATE'] + '.runs'
+
 PROCESS_RUNS_PATH = os.environ['CHEESE_TEST_STATE'] + '.process'
 
 app = CheeseAPI(port = int(os.environ['CHEESE_TEST_PORT']))
 
 #### 任务函数 ####
 
-def thread_task(*, app):
-    ''' 线程任务：拿到注入的 `app` 参数，执行次数写进 `STATE` '''
+def mark(name: str):
+    ''' 追加一行执行记录（追加写，不会覆盖其它任务的计数） '''
 
-    STATE.inc('thread_runs')
+    with open(f'{RUNS_PATH}.{name}', 'a', encoding = 'utf-8') as f:
+        f.write('1\n')
 
-async def async_task(*, app):
+def thread_task(tag = None, *, app):
+    ''' 线程任务：拿到注入的 `app` 参数，执行次数写进记录文件（`tag`）或 `STATE` '''
+
+    if tag:
+        mark(tag)
+    else:
+        STATE.inc('thread_runs')
+
+async def async_task(tag = None, *, app):
     ''' 协程任务 '''
 
-    STATE.inc('async_runs')
+    if tag:
+        mark(tag)
+    else:
+        STATE.inc('async_runs')
 
-def process_task(*, app):
+def process_task(tag = None, *, app):
     ''' 进程任务：独立进程里整体覆写状态文件会与其他任务打架，改为追加一行 '''
 
-    with open(PROCESS_RUNS_PATH, 'a', encoding = 'utf-8') as f:
-        f.write('1\n')
+    if tag:
+        mark(tag)
+    else:
+        with open(PROCESS_RUNS_PATH, 'a', encoding = 'utf-8') as f:
+            f.write('1\n')
 
 #### 工具 ####
 
@@ -76,21 +96,24 @@ def describe(task) -> dict:
 async def health(**_):
     return Response('ok')
 
-@app.route.get('/platform/qsize')
-async def platform_qsize(**_):
-    ''' 当前平台是否支持 `multiprocessing.Queue.qsize()`（macOS 未实现，任务逻辑依赖它） '''
+def count(tag: str) -> int:
+    ''' 某个任务（`tag`）记录了执行多少次 '''
 
     try:
-        multiprocessing.get_context('spawn').Queue().qsize()
-        return Response('1')
-    except Exception:
-        return Response('0')
+        with open(f'{RUNS_PATH}.{tag}', encoding = 'utf-8') as f:
+            return len([line for line in f.read().splitlines() if line])
+    except FileNotFoundError:
+        return 0
 
 @app.route.get('/runs')
 async def runs(*, request, **_):
-    ''' 任务执行次数：线程 / 协程读 STATE，进程读独立文件 '''
+    ''' 任务执行次数：指定 `tag` 时读该任务自己的记录文件，否则读线程 / 协程 / 进程的公共计数 '''
 
     name = request.query.get('name', 'thread')
+    tag = request.query.get('tag') or None
+    if tag:
+        return Response(str(count(tag)))
+
     if name == 'process':
         try:
             with open(PROCESS_RUNS_PATH, encoding = 'utf-8') as f:
@@ -112,7 +135,7 @@ async def task_count(**_):
 
 @app.route.get('/task/add')
 async def task_add(*, request, **_):
-    ''' `?name=thread|async|process&interval=0.3&expected=2&auto_remove=1&key=xxx` 注册并启动任务 '''
+    ''' `?name=thread|async|process&interval=0.3&expected=2&auto_remove=1&key=xxx&tag=xxx` 注册并启动任务 '''
 
     params = request.query
     name = params.get('name', 'thread')
@@ -120,16 +143,18 @@ async def task_add(*, request, **_):
     expected = int(params['expected']) if 'expected' in params else None
     auto_remove = params.get('auto_remove') == '1'
     key = params.get('key') or None
+    tag = params.get('tag') or None
+    args = (tag,) if tag else ()
 
     try:
         if name == 'thread':
-            task = app.scheduler.add(interval, thread_task, key = key, expected_run_num = expected, auto_remove = auto_remove)
+            task = app.scheduler.add(interval, thread_task, key = key, args = args, expected_run_num = expected, auto_remove = auto_remove)
             task.start()
         elif name == 'process':
-            task = app.scheduler.add(interval, process_task, key = key, run_type = 'PROCESS', expected_run_num = expected, auto_remove = auto_remove)
+            task = app.scheduler.add(interval, process_task, key = key, run_type = 'PROCESS', args = args, expected_run_num = expected, auto_remove = auto_remove)
             task.start()
         else:
-            task = await app.scheduler.async_add(interval, async_task, key = key, expected_run_num = expected, auto_remove = auto_remove)
+            task = await app.scheduler.async_add(interval, async_task, key = key, args = args, expected_run_num = expected, auto_remove = auto_remove)
             await task.async_start()
     except Exception as e:
         return Response(f'{type(e).__name__}: {e}', status = 500)
@@ -140,7 +165,7 @@ async def task_add(*, request, **_):
 async def task_add_without_start(*, request, **_):
     ''' 函数调用写法：`add` / `async_add` 只注册并返回 Task，不会自动启动
 
-    `?name=thread|process|async&interval=0.3&key=xxx&expected=2&timeout=1&auto_remove=1`
+    `?name=thread|process|async&interval=0.3&key=xxx&expected=2&timeout=1&auto_remove=1&tag=xxx`
     '''
 
     params = request.query
@@ -150,12 +175,14 @@ async def task_add_without_start(*, request, **_):
     timeout = float(params['timeout']) if 'timeout' in params else None
     auto_remove = params.get('auto_remove') == '1'
     key = params.get('key') or None
+    tag = params.get('tag') or None
+    args = (tag,) if tag else ()
 
     try:
         if name == 'async':
-            task = await app.scheduler.async_add(interval, async_task, key = key, expected_run_num = expected, auto_remove = auto_remove, timeout = timeout)
+            task = await app.scheduler.async_add(interval, async_task, key = key, args = args, expected_run_num = expected, auto_remove = auto_remove, timeout = timeout)
         else:
-            task = app.scheduler.add(interval, thread_task if name == 'thread' else process_task, key = key, run_type = 'THREAD' if name == 'thread' else 'PROCESS', expected_run_num = expected, auto_remove = auto_remove, timeout = timeout)
+            task = app.scheduler.add(interval, thread_task if name == 'thread' else process_task, key = key, run_type = 'THREAD' if name == 'thread' else 'PROCESS', args = args, expected_run_num = expected, auto_remove = auto_remove, timeout = timeout)
     except Exception as e:
         return Response(f'{type(e).__name__}: {e}', status = 500)
 
@@ -163,15 +190,20 @@ async def task_add_without_start(*, request, **_):
 
 @app.route.get('/task/decorate')
 async def task_decorate(*, request, **_):
-    ''' 装饰器写法：注册并自动启动任务 '''
+    ''' 装饰器写法：注册并自动启动任务（装饰器返回原函数，所以用 `get_task` 取回 Task） '''
 
     params = request.query
+    key = params.get('key') or None
+    tag = params.get('tag') or None
+    args = (tag,) if tag else ()
+
     try:
-        task = app.scheduler.add(float(params.get('interval', '0.3')), key = params.get('key') or None)(thread_task)
+        app.scheduler.add(float(params.get('interval', '0.3')), key = key, args = args)(thread_task)
+        task = app.scheduler.get_task(key)
     except Exception as e:
         return Response(f'{type(e).__name__}: {e}', status = 500)
 
-    return Response(task.key)
+    return Response(task.key if task else '')
 
 @app.route.get('/task/start')
 async def task_start(*, request, **_):

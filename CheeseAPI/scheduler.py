@@ -1,5 +1,6 @@
 import inspect, os
 import datetime, uuid, threading, multiprocessing, asyncio, time, json
+from queue import Empty
 from typing import Callable, Literal, TYPE_CHECKING
 
 import redis, redis.exceptions
@@ -13,22 +14,25 @@ class Task:
     @classmethod
     def from_dict(cls, data: dict[str, any], _scheduler_proxy) -> 'Task':
         instance = cls.__new__(cls)
+
         for key, value in data.items():
             if key == '_queue':
-                if value:
-                    value = multiprocessing.get_context('spawn').Queue()
-                    value.put(None)
-                else:
-                    value = multiprocessing.get_context('spawn').Queue()
+                value = multiprocessing.get_context('spawn').Queue()
+            elif key == '_stop_event':
+                value = threading.Event()
             elif key == 'first_run_timer':
                 value = datetime.datetime.fromtimestamp(value) if value else None
             elif key == '_last_run_timer':
                 value = datetime.datetime.fromtimestamp(value) if value else None
             setattr(instance, key, value)
+
+        if '_running_remote' not in data:
+            instance._running_remote = not data.get('_queue', True) # 旧数据只有 `_queue`（非空代表未运行）
+
         setattr(instance, '_scheduler_proxy', _scheduler_proxy)
         return instance
 
-    __slots__ = ('fn', 'interval_time', 'first_run_timer', 'expected_run_num', '_key', 'run_type', 'args', 'kwargs', 'auto_remove', '_last_run_timer', '_last_run_time', '_run_num', '_handler', '_queue', '_scheduler_proxy', 'timeout')
+    __slots__ = ('fn', 'interval_time', 'first_run_timer', 'expected_run_num', '_key', 'run_type', 'args', 'kwargs', 'auto_remove', '_last_run_timer', '_last_run_time', '_run_num', '_handler', '_queue', '_stop_event', '_running_remote', '_scheduler_proxy', 'timeout')
 
     def __init__(self, fn: Callable, interval_time: float, *, first_run_timer: datetime.datetime | float | None = None, expected_run_num: int | None = None, key: str | None = None, run_type: Literal['THREAD', 'PROCESS', 'ASYNC'] = 'THREAD', args: tuple = (), kwargs: dict = {}, auto_remove: bool = False, timeout: float | None = None, _scheduler_proxy: 'SchedulerProxy'):
         '''
@@ -67,23 +71,66 @@ class Task:
         self._last_run_time: float | None = None
         self._run_num: int = 0
         self._handler: threading.Thread | multiprocessing.Process | asyncio.Task | None = None
+
         self._queue = multiprocessing.get_context('spawn').Queue()
+        ''' 进程任务的停止信号队列（父进程放入、子进程取出） '''
+        self._stop_event = threading.Event()
+        ''' 线程 / 协程任务的停止信号（同进程内使用） '''
+        self._running_remote: bool = False
+        ''' 任务是否运行在其它进程（由 `sync_server` 反序列化而来的任务） '''
+
+    '''
+    停止信号的收发
+
+    不使用 `multiprocessing.Queue.qsize()`（macOS 未实现，调用即 `NotImplementedError`）：
+    线程 / 协程任务用 `threading.Event`，进程任务用队列的 `empty()` / `get_nowait()` 判断与取出信号。
+    '''
+
+    def _stop(self):
+        ''' 发送停止信号 '''
+
+        if self.run_type == 'PROCESS':
+            self._queue.put(None)
+        else:
+            self._stop_event.set()
+
+    def _reset_stop(self):
+        ''' 清除停止信号（启动任务前调用） '''
+
+        if self.run_type == 'PROCESS':
+            while True:
+                try:
+                    self._queue.get_nowait()
+                except Empty:
+                    break
+        else:
+            self._stop_event.clear()
+
+    def _stops(self) -> bool:
+        ''' 是否收到了停止信号 '''
+
+        if self.run_type == 'PROCESS':
+            return not self._queue.empty()
+        return self._stop_event.is_set()
 
     def __getstate__(self) -> tuple[None, dict[str, any]]:
         state = {
             key: getattr(self, key) for key in self.__slots__
         }
         state['_handler'] = None
+        state['_stop_event'] = None # `threading.Event` 不能被 pickle，进程任务只用队列信号
         return None, state
 
     def _to_dict(self) -> dict[str, any]:
         data = {
             key: getattr(self, key) for key in self.__slots__
         }
-        data['_queue'] = bool(data['_queue'].qsize())
+        data['_queue'] = None
+        data['_stop_event'] = None
+        data['_handler'] = None
+        data['_running_remote'] = self.is_running
         data['first_run_timer'] = self.first_run_timer.timestamp() if self.first_run_timer else None
         data['_last_run_timer'] = self._last_run_timer.timestamp() if self._last_run_timer else None
-        data['_handler'] = None
         data['fn'] = None
         data['args'] = tuple()
         data['kwargs'] = {}
@@ -95,7 +142,7 @@ class Task:
 
     async def async_start(self):
         if not self._handler:
-            self._handler = asyncio.create_task(self._scheduler_proxy.async_task_processing(self.key, self._queue, self.fn, *self.args, **self.kwargs))
+            self._handler = asyncio.create_task(self._scheduler_proxy.async_task_processing(self.key, self.fn, *self.args, **self.kwargs))
 
     @property
     def key(self) -> str:
@@ -105,7 +152,7 @@ class Task:
     def run_num_completed(self) -> bool:
         if self.expected_run_num is None:
             return False
-        return self._run_num >= self.expected_run_num
+        return self.run_num >= self.expected_run_num
 
     @property
     def last_run_timer(self) -> datetime.datetime | None:
@@ -129,7 +176,11 @@ class Task:
     def is_running(self) -> bool:
         ''' 任务是否在运行中 '''
 
-        return not self._queue.qsize()
+        if self._handler is None:
+            return self._running_remote
+        if isinstance(self._handler, asyncio.Task):
+            return not self._handler.done()
+        return self._handler.is_alive()
 
 class Scheduler:
     __slots__ = ('_proxy',)
@@ -310,7 +361,6 @@ class SchedulerProxy:
                     coro.close()
 
             task = Task(fn, interval_time, first_run_timer = first_run_timer, expected_run_num = expected_run_num, key = key, run_type = run_type, args = args, kwargs = kwargs, auto_remove = auto_remove, timeout = timeout, _scheduler_proxy = self)
-            task._queue.put(None)
 
             if task.key in self.get_tasks():
                 raise KeyError(f'Task with key "{task.key}" already exists')
@@ -339,7 +389,6 @@ class SchedulerProxy:
                     coro.close()
 
             task = Task(fn, interval_time = interval_time, first_run_timer = first_run_timer, expected_run_num = expected_run_num, key = key, run_type = 'ASYNC', args = args, kwargs = kwargs, auto_remove = auto_remove, timeout = timeout, _scheduler_proxy = self)
-            task._queue.put(None)
 
             if task.key in await self.async_get_tasks():
                 raise KeyError(f'Task with key "{task.key}" already exists')
@@ -356,16 +405,12 @@ class SchedulerProxy:
                 return _fn
             return wrapper
 
-    def task_processing(self, task: Task, queue: multiprocessing.Queue, fn, *args, **kwargs):
+    def task_processing(self, task: Task, fn, *args, **kwargs):
         try:
-            queue.get()
-
-            if static.scheduler_sync_servers:
-                self.get_task(task.key)._queue.get()
             if task.first_run_timer:
                 time.sleep(max(0, task.first_run_timer.timestamp() - time.time()))
 
-            while not queue.qsize():
+            while not task._stops():
                 now = time.time()
 
                 try:
@@ -378,7 +423,7 @@ class SchedulerProxy:
                 except Exception as e:
                     self.app.printer.scheduler_error(e, task)
 
-                if queue.qsize():
+                if task._stops():
                     break
 
                 task._last_run_time = time.time() - now
@@ -390,6 +435,9 @@ class SchedulerProxy:
                     sync_server.hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
                     sync_server.hpexpire('CheeseAPI_scheduler_tasks', int(task.timeout * 1000), task.key)
 
+                if task.run_num_completed:
+                    break
+
                 time.sleep(max(0, task.interval_time - time.time() + now))
         except (KeyboardInterrupt, SystemExit):
             ...
@@ -399,16 +447,16 @@ class SchedulerProxy:
             if _redis.hexists('CheeseAPI_scheduler_tasks', task.key):
                 _redis.hpersist('CheeseAPI_scheduler_tasks', task.key)
 
-    async def async_task_processing(self, key: str, queue: multiprocessing.Queue, fn, *args, **kwargs):
-        queue.get()
+        if task.run_type == 'PROCESS':
+            task._reset_stop() # 取出残留的停止信号，保证下次启动时队列是干净的
 
+    async def async_task_processing(self, key: str, fn, *args, **kwargs):
         task = await self.async_get_task(key)
-        if static.scheduler_sync_servers:
-            task._queue.get()
+
         if task.first_run_timer:
             await asyncio.sleep(max(0, task.first_run_timer.timestamp() - time.time()))
 
-        while not queue.qsize():
+        while not task._stops():
             now = time.time()
 
             try:
@@ -421,7 +469,7 @@ class SchedulerProxy:
             except Exception as e:
                 self.app.printer.scheduler_error(e, task)
 
-            if queue.qsize():
+            if task._stops():
                 break
 
             task._last_run_time = time.time() - now
@@ -469,10 +517,11 @@ class SchedulerProxy:
             redis.Redis(connection_pool = static.scheduler_sync_servers[0]).publish('CheeseAPI_scheduler', json.dumps(['start', key]))
             return
 
+        task._reset_stop()
         if task.run_type == 'THREAD':
-            task._handler = threading.Thread(target = self.task_processing, args = (task, task._queue, task.fn, *task.args), kwargs = task.kwargs, daemon = True)
+            task._handler = threading.Thread(target = self.task_processing, args = (task, task.fn, *task.args), kwargs = task.kwargs, daemon = True)
         elif task.run_type == 'PROCESS':
-            task._handler = multiprocessing.get_context('spawn').Process(target = self.task_processing, args = (task, task._queue, task.fn, *task.args), kwargs = task.kwargs, daemon = True)
+            task._handler = multiprocessing.get_context('spawn').Process(target = self.task_processing, args = (task, task.fn, *task.args), kwargs = task.kwargs, daemon = True)
         task._handler.start()
 
         if task.auto_remove:
@@ -489,7 +538,8 @@ class SchedulerProxy:
         if not task and static.scheduler_sync_servers:
             await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).publish('CheeseAPI_scheduler', json.dumps(['start', key]))
         else:
-            task._handler = asyncio.create_task(self.async_task_processing(key, task._queue, task.fn, *task.args, **task.kwargs))
+            task._reset_stop()
+            task._handler = asyncio.create_task(self.async_task_processing(key, task.fn, *task.args, **task.kwargs))
 
     def stop(self, key: str):
         task = self.get_task(key)
@@ -503,7 +553,7 @@ class SchedulerProxy:
             if static.scheduler_sync_servers:
                 redis.Redis(connection_pool = static.scheduler_sync_servers[0]).publish('CheeseAPI_scheduler', json.dumps(['stop', key]))
         else:
-            local_task._queue.put(None)
+            local_task._stop()
             if static.scheduler_sync_servers:
                 redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
 
@@ -519,7 +569,7 @@ class SchedulerProxy:
             if static.scheduler_sync_servers:
                 redis.Redis(connection_pool = static.scheduler_sync_servers[0]).publish('CheeseAPI_scheduler', json.dumps(['remove', key]))
         else:
-            local_task._queue.put(None)
+            local_task._stop()
             self._tasks.pop(key, None)
             if static.scheduler_sync_servers:
                 redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hdel('CheeseAPI_scheduler_tasks', key)
@@ -536,7 +586,7 @@ class SchedulerProxy:
             if static.scheduler_sync_servers:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).publish('CheeseAPI_scheduler', json.dumps(['stop', key]))
         else:
-            local_task._queue.put(None)
+            local_task._stop()
             if static.scheduler_sync_servers:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
 
@@ -550,7 +600,7 @@ class SchedulerProxy:
             if static.scheduler_sync_servers:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).publish('CheeseAPI_scheduler', json.dumps(['remove', key]))
         else:
-            local_task._queue.put(None)
+            local_task._stop()
             self._tasks.pop(key, None)
             if static.scheduler_sync_servers:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)

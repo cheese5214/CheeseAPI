@@ -64,24 +64,21 @@ def case_memory_constructor(t, server):
     t.check('File(name, data)：path 为 None', file.path is None, repr(file.path))
     t.check('File(name, data)：name 为传入名字', file.name == 'memory.txt', repr(file.name))
     t.check('File(name, data)：data 直接返回内存数据', file.data == b'memory-bytes', repr(file.data))
-
-    # 实测：2 参构造不修改 data_in_file 标志，默认仍是 True，尽管数据其实在内存里（见下方已知缺陷）
-    t.check('File(name, data)：实测 data_in_file 默认为 True', file.data_in_file is True, repr(file.data_in_file))
+    t.check('File(name, data)：data_in_file 为 False（数据不在文件中）', file.data_in_file is False, repr(file.data_in_file))
     t.check('File(name, data)：数据实际存在内存（_data 非 None）', file._data == b'memory-bytes', repr(file._data))
 
 def case_memory_constructor_data_in_file_flag(t, server):
     '''
-    `File(name, data)` 的 `data_in_file` 语义：数据在内存中，却报告 True
+    `File(name, data)` 的 `data_in_file` 语义：数据在内存中，所以报告 False
 
-    框架内部用 `_data is None` 表示「数据在文件里」，而 2 参构造的 `_data` 非空，
-    两者矛盾，调用方若按 `data_in_file` 判断会误以为数据已落盘。
+    框架内部用 `_data is None` 表示「数据在文件里」，2 参构造的 `_data` 非空，两者一致。
     '''
     file = File('flag.txt', b'payload')
 
-    t.known_issue(
-        'File(name, data)：data_in_file 应表示数据不在文件中（False）',
+    t.check(
+        'File(name, data)：data_in_file 表示数据不在文件中（False）',
         file.data_in_file is False,
-        f'data_in_file={file.data_in_file!r}，但 _data={file._data!r} 说明数据在内存'
+        f'data_in_file={file.data_in_file!r}，_data={file._data!r}'
     )
 
 def case_name_derivation(t, server):
@@ -152,8 +149,7 @@ def case_empty_memory_data(t, server):
     '''
     空的内存文件：`File(name, b'')` 的 `data` 应返回空字节
 
-    实测 `data` 用 `if self._data:` 判空，空 bytes 会被当作「未加载」，
-    于是去 `open(self._path)`，而内存文件 path 为 None，抛 TypeError。
+    `data` 以 `_data is not None` 判空，空 bytes 不再被当作「未加载」去读 `path`。
     '''
     file = File('empty.txt', b'')
 
@@ -166,10 +162,10 @@ def case_empty_memory_data(t, server):
         data = None
         error = f'{type(e).__name__}: {e}'
 
-    t.known_issue(
+    t.check(
         'File(name, b"")：data 返回空字节',
         data == b'',
-        f'data={data!r}，抛出 {error}（path 为 None 时被当成需要读文件）' if error else f'data={data!r}'
+        f'data={data!r}，抛出 {error}' if error else f'data={data!r}'
     )
 
 def case_empty_path_file(t, server):

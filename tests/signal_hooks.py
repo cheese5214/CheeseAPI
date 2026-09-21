@@ -60,7 +60,7 @@ def case_lifecycle_start(t, server):
     # 单 worker 下没有可加载的模块（tests 目录下没有带 __init__.py 的子目录）
     t.check('启动：没有可加载模块时 before_load_module / after_load_module 不触发', 'before_load_module' not in triggered and 'after_load_module' not in triggered, f'实际触发={triggered}')
 
-    t.known_issue('启动：before_server_start 只应触发一次', len(events(server, 'before_server_start')) == 1, f'实际触发 {len(events(server, "before_server_start"))} 次（AppProxy.start 与 AppProxy.server_start 各发送一次）')
+    t.check('启动：before_server_start 只触发一次', len(events(server, 'before_server_start')) == 1, f'实际触发 {len(events(server, "before_server_start"))} 次')
 
 def case_lifecycle_stop(t, server):
     ''' 停机阶段的信号：另起一个服务进程，停止后读取状态文件 '''
@@ -75,11 +75,11 @@ def case_lifecycle_stop(t, server):
     for name in ['before_worker_stop', 'after_worker_stop', 'before_app_stop', 'after_app_stop']:
         t.check(f'停机：{name} 触发过', name in triggered, f'未触发；实际触发={triggered}')
 
-    tail = [name for name in triggered if name in ('before_worker_stop', 'after_worker_stop', 'after_workers_start', 'before_app_stop', 'after_app_stop')]
-    t.check('停机：停机信号顺序为 工作进程停止 → 应用停止', tail == ['before_worker_stop', 'after_worker_stop', 'after_workers_start', 'before_app_stop', 'after_app_stop'], f'{tail}')
+    tail = [name for name in triggered if name in ('after_workers_start', 'before_worker_stop', 'after_worker_stop', 'before_app_stop', 'after_app_stop')]
+    t.check('停机：after_workers_start 已在请求处理前触发，停机信号顺序为 工作进程停止 → 应用停止', tail == ['after_workers_start', 'before_worker_stop', 'after_worker_stop', 'before_app_stop', 'after_app_stop'], f'{tail}')
     t.check('停机：before_worker_stop 收到 is_first 参数', events(stopped, 'before_worker_stop')[0]['is_first'] is True, f"{events(stopped, 'before_worker_stop')[0]}")
 
-    t.known_issue('启动：after_workers_start 应在服务开始处理请求前触发', triggered.index('after_workers_start') < triggered.index('before_request'), f'实际在 worker 退出后才触发：{tail}')
+    t.check('启动：after_workers_start 在服务开始处理请求前触发', triggered.index('after_workers_start') < triggered.index('before_request'), f'实际触发顺序：{tail}')
 
 def case_request_order(t, server):
     ''' 请求周期信号的触发顺序 '''
@@ -126,7 +126,7 @@ def case_handler_exception(t, server):
     '''
     信号处理函数抛异常时的表现
 
-    `before_request` / `before_response` 抛异常 → 响应发不出去（客户端拿不到响应，只有异常）；
+    `before_request` / `before_response` 抛异常 → 响应发不出去，连接被服务端关闭（客户端只会看到连接断开）；
     `after_response` / `after_request` 抛异常 → 响应已经发出，客户端正常拿到响应。
     两种情况服务进程都要继续存活。
     '''
@@ -168,7 +168,7 @@ def case_handler_exception(t, server):
     t.check('异常：after_request 抛异常时客户端仍能拿到响应', server.get('/probe') == 'probe')
     t.check('异常：after_request 抛异常后服务仍能响应', server.get('/health') == 'ok')
 
-    t.known_issue('异常：信号处理函数抛异常时连接应被关闭（客户端不该无限等待）', before_request_outcome == 'closed', f'before_request 抛异常时实际 outcome={before_request_outcome}：异常在 get_request 内部抛出，client_socket_process 的兜底日志引用了尚未赋值的 request，抛 UnboundLocalError 后连接既不响应也不关闭（还会掩盖原始异常）')
+    t.check('异常：信号处理函数抛异常时连接被关闭（客户端不会无限等待）', before_request_outcome == 'closed', f'before_request 抛异常时实际 outcome={before_request_outcome}')
 
 CASES = [
     ('启动生命周期信号', case_lifecycle_start),

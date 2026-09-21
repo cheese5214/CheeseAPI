@@ -201,8 +201,8 @@ def case_compress_min_length(t, server):
     t.check(f'compress_min_length：长度为 {COMPRESS_MIN_LENGTH - 1} 的响应体不压缩', under.text == 'y' * (COMPRESS_MIN_LENGTH - 1) and under.headers.get('content-encoding') is None, f'content-encoding {under.headers.get("content-encoding")!r}，长度 {len(under.text)}')
     t.check('compress_min_length：长度超过阈值的响应体压缩', big.text == 'compress-me ' * 1000 and big.headers.get('content-encoding') == 'gzip', f'content-encoding {big.headers.get("content-encoding")!r}，长度 {len(big.text)}')
 
-    t.known_issue(
-        f'compress_min_length：长度恰好等于阈值（{COMPRESS_MIN_LENGTH}）的响应体也应压缩（当前 `< min` 才删 content-encoding、`> min` 才压缩，等于阈值两边都不落）',
+    t.check(
+        f'compress_min_length：长度恰好等于阈值（{COMPRESS_MIN_LENGTH}）的响应体也压缩',
         exact.headers.get('content-encoding') == 'gzip' and int(exact.headers['content-length']) < COMPRESS_MIN_LENGTH,
         f'content-encoding {exact.headers.get("content-encoding")!r}，content-length {exact.headers.get("content-length")}'
     )
@@ -299,8 +299,8 @@ def case_keep_alive_max_requests(t, server):
 
     client.send('GET', '/health', connection = 'keep-alive')
     overflow = client.read(2.0)
-    t.known_issue(
-        f'keep_alive_max_requests：第 {KEEP_ALIVE_MAX_REQUESTS + 1} 个请求应超出上限被关闭（`get_request` 的计数在读取之后自增，实际服务了 max + 1 次）',
+    t.check(
+        f'keep_alive_max_requests：第 {KEEP_ALIVE_MAX_REQUESTS + 1} 个请求超出上限被关闭',
         overflow is None,
         f'第 {KEEP_ALIVE_MAX_REQUESTS + 1} 个请求得到 {overflow[0] if overflow else None}，而响应头宣告 max={KEEP_ALIVE_MAX_REQUESTS}'
     )

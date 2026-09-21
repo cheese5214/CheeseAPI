@@ -17,6 +17,9 @@ APP = 'apps/response.py'
 COMPRESSIBLE = 'CheeseAPI 响应压缩测试内容。' * 64
 ''' 与 `apps/response.py` 里的同名常量一致：长度远超全局 `compress_min_length = 1024` '''
 
+EXACT_COMPRESSIBLE = 'a' * 1024
+''' 与 `apps/response.py` 里的同名常量一致：长度恰好等于全局 `compress_min_length = 1024` '''
+
 STATIC_DIR = Path(__file__).parent.parent / 'examples' / 'static'
 TEXT_FILE = STATIC_DIR / 'file.txt'
 JPEG_FILE = STATIC_DIR / 'file.jpeg'
@@ -149,7 +152,7 @@ def case_async_iterable(t, server):
     t.check('异步可迭代：以 0 长度块结束分块流', response.body.endswith(b'0\r\n\r\n'), repr(response.body[-12:]))
 
     sizes = chunk_size_lines(response.body)
-    t.known_issue('异步可迭代：块长度应为纯十六进制（RFC 7230 不允许 0x 前缀）', all(re.fullmatch(r'[0-9a-f]+', size.decode()) is not None for size in sizes), f'实际块长度行：{sizes}')
+    t.check('异步可迭代：块长度应为纯十六进制（RFC 7230 不允许 0x 前缀）', all(re.fullmatch(r'[0-9a-f]+', size.decode()) is not None for size in sizes), f'实际块长度行：{sizes}')
 
 #### 状态码与响应头 ####
 
@@ -185,10 +188,10 @@ def case_cookie_attributes(t, server):
 
 def case_cookie_multi(t, server):
     response = request(server, '/cookie/multi')
-    set_cookie = response.header('set-cookie') or ''
+    set_cookie = response.all_headers('set-cookie')
 
-    t.check('cookie：两个 cookie 的内容都出现在响应里', 'first=1' in set_cookie and 'second=2; Max-Age=60' in set_cookie, repr(response.all_headers('set-cookie')))
-    t.known_issue('cookie：多个 cookie 应写成多行 set-cookie（RFC 6265）', len(response.all_headers('set-cookie')) == 2, f'实际 {len(response.all_headers("set-cookie"))} 行：{response.all_headers("set-cookie")}')
+    t.check('cookie：两个 cookie 的内容都出现在响应里', 'first=1' in set_cookie and 'second=2; Max-Age=60' in set_cookie, repr(set_cookie))
+    t.check('cookie：多个 cookie 应写成多行 set-cookie（RFC 6265）', set_cookie == ['first=1', 'second=2; Max-Age=60'], repr(set_cookie))
 
 #### 重定向 ####
 
@@ -196,7 +199,7 @@ def case_redirect(t, server):
     ''' `RedirectResponse` 各状态码：期望的状态码与 location 头 '''
     for code in (301, 302, 303, 307, 308):
         response = request(server, f'/redirect/{code}')
-        t.known_issue(
+        t.check(
             f'重定向 {code}：返回 {code} 且 location 为 /target',
             response.status == code and response.header('location') == '/target',
             f'实际 status={response.status}，location={response.header("location")!r}'
@@ -244,11 +247,11 @@ def case_file_chunked(t, server):
 
     response = request(server, '/file/chunked')
     t.check('文件分块：不返回 content-length', response.header('content-length') is None, repr(response.header('content-length')))
-    t.check('文件分块：完整文件内容到达客户端', response.body == content, f'{len(response.body)} vs {len(content)} bytes')
-    t.known_issue('文件分块：应声明 transfer-encoding: chunked 并按分块编码发送', response.header('transfer-encoding') == 'chunked' and response.body != content, f'transfer-encoding={response.header("transfer-encoding")!r}，正文 {len(response.body)} bytes（未经分块编码）')
+    t.check('文件分块：完整文件内容到达客户端', chunked_payload(response.body) == content, f'{len(chunked_payload(response.body))} vs {len(content)} bytes')
+    t.check('文件分块：应声明 transfer-encoding: chunked 并按分块编码发送', response.header('transfer-encoding') == 'chunked' and response.body != content, f'transfer-encoding={response.header("transfer-encoding")!r}，正文 {len(response.body)} bytes')
 
     response = request(server, '/file/chunked-size')
-    t.known_issue('文件分块：chunked_size=64 时全部内容都应到达客户端', response.body == COMPRESSIBLE.encode(), f'实际只到达 {len(response.body)} / {len(COMPRESSIBLE.encode())} bytes')
+    t.check('文件分块：chunked_size=64 时全部内容都应到达客户端', chunked_payload(response.body) == COMPRESSIBLE.encode(), f'实际只到达 {len(chunked_payload(response.body))} / {len(COMPRESSIBLE.encode())} bytes')
 
 #### 压缩 ####
 
@@ -289,6 +292,9 @@ def case_compress_negotiation(t, server):
     response = request(server, '/compress/auto-big', {'accept-encoding': '*'})
     t.check('自动协商：Accept-Encoding 为 * 时选中全局首选 gzip', response.header('content-encoding') == 'gzip', repr(response.header('content-encoding')))
 
+    response = request(server, '/compress/auto-exact', {'accept-encoding': 'gzip'})
+    t.check('自动协商：正文长度恰好等于 compress_min_length 时也压缩', response.header('content-encoding') == 'gzip' and decoded(response) == EXACT_COMPRESSIBLE.encode(), f'content-encoding={response.header("content-encoding")!r}')
+
     response = request(server, '/compress/auto-big', {'accept-encoding': 'identity'})
     t.check('自动协商：identity 时不压缩', response.header('content-encoding') is None and response.body == COMPRESSIBLE.encode(), f'content-encoding={response.header("content-encoding")!r}')
 
@@ -302,11 +308,10 @@ def case_compress_negotiation(t, server):
 def case_compress_min_length_forced(t, server):
     ''' 显式 `compress` 与 `compress_min_length` 的关系 '''
     response = request(server, '/compress/forced-small', {'accept-encoding': 'gzip'})
-    t.check('显式压缩：小于 compress_min_length 的响应体按原样返回', response.header('content-encoding') is None and response.body == '小响应体'.encode(), f'content-encoding={response.header("content-encoding")!r}')
-    t.known_issue('显式压缩：compress 指定的算法应无视 compress_min_length 生效', response.header('content-encoding') == 'gzip', f'实际 content-encoding={response.header("content-encoding")!r}，正文未压缩（{len(response.body)} bytes）')
+    t.check('显式压缩：compress 指定的算法应无视 compress_min_length 生效', response.header('content-encoding') == 'gzip' and decoded(response) == '小响应体'.encode(), f'content-encoding={response.header("content-encoding")!r}，正文 {len(response.body)} bytes')
 
     response = request(server, '/compress/auto-big', {'accept-encoding': 'gzip;q=0'})
-    t.known_issue('自动协商：q=0 表示不可接受，不应选中 gzip', response.header('content-encoding') is None, f'实际 content-encoding={response.header("content-encoding")!r}')
+    t.check('自动协商：q=0 表示不可接受，不应选中 gzip', response.header('content-encoding') is None and response.body == COMPRESSIBLE.encode(), f'content-encoding={response.header("content-encoding")!r}')
 
 #### 异常 ####
 
@@ -325,7 +330,7 @@ def case_error_async_iter(t, server):
     response = request(server, '/error/raise-async-iter')
 
     t.check('异步生成器异常：状态码与首块仍正常发送', response.status == 200 and b'ok' in response.body, f'status={response.status}, body={response.body!r}')
-    t.known_issue('异步生成器异常：应补发 0 长度块结束分块流', response.body.endswith(b'0\r\n\r\n'), f'实际正文结尾：{response.body[-12:]!r}（分块流未结束，客户端会认为响应被截断）')
+    t.check('异步生成器异常：应补发 0 长度块结束分块流', response.body.endswith(b'0\r\n\r\n'), f'实际正文结尾：{response.body[-12:]!r}')
 
 def case_no_warnings(t, server):
     ''' 整个响应域跑下来不应产生运行时告警（如协程未 await） '''
@@ -336,7 +341,7 @@ def case_public_api(t, server):
     ''' 公开 API：响应相关类型在包顶层的导出情况 '''
     t.check('公开 API：Response 与 FileResponse 由包顶层导出', CheeseAPI.Response.__name__ == 'Response' and issubclass(CheeseAPI.FileResponse, CheeseAPI.Response), f'Response={CheeseAPI.Response!r}, FileResponse={CheeseAPI.FileResponse!r}')
     t.check('公开 API：RedirectResponse 是 Response 的子类', RedirectResponse.__mro__[1] is CheeseAPI.Response, RedirectResponse.__mro__)
-    t.known_issue('公开 API：RedirectResponse 应能从 CheeseAPI 顶层导入', hasattr(CheeseAPI, 'RedirectResponse'), '实际 `from CheeseAPI import RedirectResponse` 抛 ImportError，只能从 CheeseAPI.response 导入')
+    t.check('公开 API：RedirectResponse 应能从 CheeseAPI 顶层导入', CheeseAPI.RedirectResponse is RedirectResponse, repr(getattr(CheeseAPI, 'RedirectResponse', None)))
 
 CASES = [
     ('响应体类型：dict / list / str / bytes / None', case_body_types),

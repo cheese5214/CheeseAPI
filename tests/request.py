@@ -141,14 +141,9 @@ def case_body_types(t, server):
 
     status, data = snapshot(server, 'POST', '/echo', data = '{"a": 1}', headers = {'Content-Type': 'application/json; charset=utf-8'})
     t.check(
-        '带 charset 的 JSON：实测 body 保持 bytes（未进入 JSON 解析分支）',
-        status == 200 and data.get('body') == {'type': 'bytes', 'text': '{"a": 1}'} and data.get('json') is None,
+        'content-type 带参数（application/json; charset=utf-8）仍按 JSON 解析，body 保持 bytes',
+        status == 200 and data.get('json') == {'a': 1} and data.get('body') == {'type': 'bytes', 'text': '{"a": 1}'},
         f'status={status} body={data.get("body")} json={data.get("json")}'
-    )
-    t.known_issue(
-        'content-type 带参数（application/json; charset=utf-8）时应按 JSON 解析',
-        data.get('json') == {'a': 1},
-        f'json={data.get("json")}（当前实现要求 content-type 与 `application/json` 完全相等）'
     )
 
 def case_form(t, server):
@@ -229,10 +224,10 @@ def case_content_disposition_file(t, server):
         status == 200 and (data.get('file') or {}).get('name') == 'a.txt',
         f'status={status} file={data.get("file")}'
     )
-    t.known_issue(
-        'content-disposition 单文件的 File.data 应当是 bytes（text/plain 时被解析成了 str）',
-        (data.get('file') or {}).get('data_type') == 'bytes',
-        f'file={data.get("file")}'
+    t.check(
+        'content-disposition 单文件的 File.data 为 bytes（即使 content-type 是 text/plain）',
+        status == 200 and data.get('file') == {'name': 'a.txt', 'data_type': 'bytes', 'text': 'raw-body'},
+        f'status={status} file={data.get("file")}'
     )
 
 def case_cookies(t, server):
@@ -284,13 +279,15 @@ def case_ranges(t, server):
 
     status, data = snapshot(server, 'GET', '/echo', headers = {'Range': 'bytes=-50'})
     t.check(
-        '后缀 Range（bytes=-50，实测被解析成 [0, 50]）',
-        status == 200 and data.get('ranges') == [[0, 50]],
+        '后缀 Range（bytes=-50）解析为负起点 + 开放终点，表示末尾 50 字节',
+        status == 200 and data.get('ranges') == [[-50, None]],
         f'ranges={data.get("ranges")}'
     )
-    t.known_issue(
-        '后缀 Range 应表示末尾 50 字节，当前实现按 [0, 50] 解析',
-        data.get('ranges') == [[50, None]] or data.get('ranges') == [[-50, None]],
+
+    status, data = snapshot(server, 'GET', '/echo', headers = {'Range': 'bytes=0-9,-5'})
+    t.check(
+        '普通区间与后缀区间混用时各自正确解析',
+        status == 200 and data.get('ranges') == [[0, 9], [-5, None]],
         f'ranges={data.get("ranges")}'
     )
 

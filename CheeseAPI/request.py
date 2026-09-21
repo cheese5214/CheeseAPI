@@ -169,7 +169,12 @@ class RequestProxy:
                 range_part = range_part.strip()
                 if '-' in range_part:
                     start, end = range_part.split('-', 1)
-                    self.request.ranges.append((int(start) if start else 0, int(end) if end else None))
+                    if start:
+                        self.request.ranges.append((int(start), int(end) if end else None))
+                    elif end:
+                        self.request.ranges.append((-int(end), None))  # 后缀 Range（`bytes=-50`）：负起点表示从末尾倒数，末尾 50 字节
+                    else:
+                        self.request.ranges.append((0, None))
 
         if 'upgrade' in self.request.headers and self.request.headers['upgrade'] == 'websocket':
             self.request._method = 'WEBSOCKET'
@@ -246,17 +251,20 @@ class RequestProxy:
         if self.request.body is None:
             return
 
+        body = self.request.body
         content_type = self.request.headers.get('content-type')
-        if content_type == 'text/plain' or content_type is None:
-            self.request._body = self.request.body.decode()
-        elif content_type == 'application/json':
-            self.request._json = json.loads(self.request.body)
-        elif content_type == 'application/x-www-form-urlencoded':
+        media_type = (content_type or '').split(';')[0].strip().lower() or None  # 忽略 `; charset=utf-8` 等参数
+
+        if media_type == 'text/plain' or media_type is None:
+            self.request._body = body.decode()
+        elif media_type == 'application/json':
+            self.request._json = json.loads(body)
+        elif media_type == 'application/x-www-form-urlencoded':
             self.request._form = {
-                key: value[0] for key, value in urllib.parse.parse_qs(self.request.body.decode()).items()
+                key: value[0] for key, value in urllib.parse.parse_qs(body.decode()).items()
             }
-        elif content_type.startswith('multipart/form-data'):
-            for part in self.request.body.split(f'--{content_type.split("boundary=")[1].strip()}'.encode()):
+        elif media_type == 'multipart/form-data':
+            for part in body.split(f'--{content_type.split("boundary=")[1].strip()}'.encode()):
                 if part == b'' or part == b'--\r\n':
                     continue
 
@@ -290,4 +298,4 @@ class RequestProxy:
         if self.request.headers.get('content-disposition'):
             match = re.search(r'filename="([^"]*)"', self.request.headers['content-disposition'])
             if match:
-                self.request._file = File(match.group(1), self.request.body)
+                self.request._file = File(match.group(1), body)  # 始终用原始 bytes，避免 text/plain 分支已解码成 str

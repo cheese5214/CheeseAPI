@@ -29,6 +29,9 @@ JPEG_FILE = STATIC_DIR / 'file.jpeg'
 # 重复性文本：压缩后体积明显变小，便于断言「确实压缩了」
 COMPRESSIBLE = 'CheeseAPI 响应压缩测试内容。' * 64
 
+# 长度恰好等于全局 compress_min_length（默认 1024）的响应体
+EXACT_COMPRESSIBLE = 'a' * 1024
+
 app = CheeseAPI(
     port = int(os.environ['CHEESE_TEST_PORT'])
 )
@@ -226,6 +229,11 @@ async def compress_auto_small(**_):
 async def compress_auto_big(**_):
     '''自动协商 + 大于 `compress_min_length` 的响应体'''
     return Response(COMPRESSIBLE)
+
+@app.route.get('/compress/auto-exact')
+async def compress_auto_exact(**_):
+    '''自动协商 + 长度恰好等于 `compress_min_length` 的响应体'''
+    return Response(EXACT_COMPRESSIBLE)
 
 @app.route.get('/compress/auto-chunked')
 async def compress_auto_chunked(**_):

@@ -3,8 +3,7 @@ CORS 域测试应用
 
 除正常的跨域请求路由外，另有 `/cors/echo/*` 系列路由：直接调用 `CORS.get_response`
 并把生成的响应头回显出来，用来观察 CORS 的判定逻辑本身
-（框架内 CORS 只挂在「方法不匹配（405）」分支上，而那个分支内部又用同一个 method 重查路由、必然还是 405，
-CORS 判定实际不可达）。
+（预检请求走 `get_cors_response`：先按路径取路由级 CORS 配置，未配置则回退应用级）。
 '''
 import os, sys
 from pathlib import Path

@@ -27,8 +27,9 @@ class CORS:
 
         if origin in self.allow_origins:
             headers['access-control-allow-origin'] = origin
-        elif '*' in self.allow_origins and not self.allow_credentials:
-            headers['access-control-allow-origin'] = '*'
+        elif '*' in self.allow_origins:
+            ''' 通配来源与凭证不能同用，携带凭证时回显具体 origin '''
+            headers['access-control-allow-origin'] = origin if self.allow_credentials else '*'
 
         headers['access-control-allow-methods'] = ', '.join(self.allow_methods)
 

@@ -1,4 +1,4 @@
-import os, pathlib, multiprocessing, ssl, socket, asyncio, concurrent.futures, inspect, importlib.util
+import os, re, pathlib, multiprocessing, ssl, socket, asyncio, concurrent.futures, inspect, importlib.util
 from typing import Type, Literal, Callable, AsyncIterable, TYPE_CHECKING
 
 import signal, redis
@@ -43,8 +43,6 @@ class AppProxy:
             self.load_modules()
 
             self.app._is_running = True
-
-            self.app.signal.before_server_start.send()
 
             self.server_start()
 
@@ -215,6 +213,7 @@ class AppProxy:
 
         processes = []
         if workers == 1:
+            ''' 单进程模式下工作进程复用当前进程，after_workers_start 在 worker 内、开始接收请求前触发 '''
             self.worker_running(True)
         else:
             processes: list[multiprocessing.Process] = []
@@ -223,10 +222,10 @@ class AppProxy:
                 process.start()
                 processes.append(process)
 
-        self.after_workers_start(workers)
-        self.app.signal.after_workers_start.send(kwargs = {
-            'workers': workers
-        })
+            self.after_workers_start(workers)
+            self.app.signal.after_workers_start.send(kwargs = {
+                'workers': workers
+            })
         return processes
 
     def before_workers_start(self, workers: int) -> int:
@@ -272,6 +271,12 @@ class AppProxy:
                 'is_first': is_first
             })
 
+            if is_first and self.app.workers == 1:
+                self.after_workers_start(self.app.workers)
+                self.app.signal.after_workers_start.send(kwargs = {
+                    'workers': self.app.workers
+                })
+
             while True:
                 client_socket, addr = await loop.sock_accept(self.server_socket)
                 loop.create_task(self.client_socket_process(client_socket, addr))
@@ -289,6 +294,7 @@ class AppProxy:
             self.app.printer.app_error(e)
 
     async def client_socket_process(self, client_socket: socket.socket, addr: tuple[str, int]):
+        request = None
         try:
             loop = asyncio.get_event_loop()
 
@@ -298,6 +304,8 @@ class AppProxy:
             async for request, response in self.get_request(client_socket, addr):
                 if not response:
                     response = await self.get_response(request)
+                    if inspect.isfunction(request.fn):
+                        await self.attach_cors_headers(request, response)
 
                 if not response._proxy:
                     response = self.app.ResponseProxy_Class(self.app, response).response
@@ -313,7 +321,11 @@ class AppProxy:
             if client_socket._closed is False:
                 client_socket.close()
         except Exception as e:
-            self.app.printer.fn_error(e, request)
+            ''' 请求尚未创建时无法定位请求上下文，直接上报原始异常，而不是引用未赋值的 request '''
+            if request is None:
+                self.app.printer.app_error(e)
+            else:
+                self.app.printer.fn_error(e, request)
 
         if client_socket._closed is False:
             client_socket.close()
@@ -330,6 +342,25 @@ class AppProxy:
         await self.app.signal.after_response.async_send(kwargs = {
             'response': response
         })
+
+    async def attach_cors_headers(self, request: Request, response: Response):
+        ''' 简单请求：把 CORS 响应头并入路由响应；来源不在白名单内时不附加任何 CORS 头 '''
+        if not request.headers.get('origin'):
+            return
+
+        cors_response = self.get_request_cors(request).get_response(request)
+        if cors_response.status != 204:
+            return
+
+        for key, value in cors_response.headers.items():
+            response.headers.setdefault(key, value)
+
+    def get_request_cors(self, request: Request) -> CORS:
+        ''' 取请求命中路由的 CORS 配置，未配置时回退应用级 '''
+        route = self.app.route._proxy.get_route(request.method, request.path)
+        if route != 404 and route != 405 and route[0]['cors'] is not None:
+            return route[0]['cors']
+        return self.app.cors
 
     async def get_response(self, request: Request) -> Response:
         if inspect.isfunction(request.fn):
@@ -352,7 +383,7 @@ class AppProxy:
     async def get_request(self, client_socket: socket.socket, addr: tuple[str, int]) -> AsyncIterable[tuple[Request, Response | None]]:
         keep_alive_max_requests = 0
         request = None
-        while keep_alive_max_requests < self.app.keep_alive_max_requests and client_socket._closed is False:
+        while client_socket._closed is False:
             if request:
                 keep_alive_max_requests += 1
 
@@ -362,6 +393,9 @@ class AppProxy:
                 })
 
                 if request._proxy.protocol is None or not self.app.keep_alive or (request._proxy.protocol == 'HTTP/1.0' and request.headers.get('connection') != 'keep-alive') or (request._proxy.protocol == 'HTTP/1.1' and request.headers.get('connection') == 'close'):
+                    break
+
+                if keep_alive_max_requests >= self.app.keep_alive_max_requests:
                     break
 
             client_socket, addr = await self.before_request(client_socket, addr)
@@ -426,7 +460,9 @@ class AppProxy:
                 relative_path = relative_path[1:]
 
             path = os.path.join(_path, relative_path)
-            if not os.path.abspath(path).startswith(os.path.abspath(_path)):
+            static_root = os.path.abspath(_path)
+            target_path = os.path.abspath(path)
+            if target_path != static_root and target_path.startswith(f'{static_root}{os.sep}') is False:
                 return Response(status = 403)
 
             if os.path.exists(path):
@@ -440,13 +476,33 @@ class AppProxy:
         return Response(status = 404)
 
     async def get_cors_response(self, request: Request) -> Response:
-        route = self.app.route._proxy.get_route(request.method, request.path)
-        if route != 405:
-            if route[0]['cors']:
-                return route[0]['cors'].get_response(request)
-            else:
-                return self.app.cors.get_response(request)
-        return Response(status = 405)
+        ''' 预检请求（OPTIONS + Origin + Access-Control-Request-Method）返回 CORS 响应，其余 405 场景保持裸 405 '''
+        if request.method != 'OPTIONS' or not request.headers.get('origin') or not request.headers.get('access-control-request-method'):
+            return Response(status = 405)
+
+        cors = self.get_route_cors(request.path) or self.app.cors
+        return cors.get_response(request)
+
+    def get_route_cors(self, path: str) -> CORS | None:
+        ''' 按路径取路由级 CORS 配置（与请求方法无关），供预检请求使用 '''
+        routes = self.app.route.routes.get(path)
+        if routes is None:
+            for _path, dynamic_routes in self.app.route._proxy.dynamic_routes.items():
+                if re.match(_path, path) is not None:
+                    routes = dynamic_routes
+                    break
+
+        if not routes:
+            return None
+
+        if routes.get('OPTIONS') and routes['OPTIONS']['cors'] is not None:
+            return routes['OPTIONS']['cors']
+
+        for route in routes.values():
+            if route['cors'] is not None:
+                return route['cors']
+
+        return None
 
     async def before_request(self, client_socket: socket.socket, addr: tuple[str, int]) -> tuple[socket.socket, tuple]:
         return client_socket, addr

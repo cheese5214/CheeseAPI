@@ -29,6 +29,7 @@ class File:
         elif len(args) == 2:
             self._name = args[0]
             self._data = args[1]
+            self._data_in_file = False
 
     def save(self, path: str, update_path: bool = False, data_in_file: bool = False):
         '''
@@ -65,7 +66,7 @@ class File:
 
     @property
     def data(self) -> bytes:
-        if self._data:
+        if self._data is not None:
             return self._data
         else:
             with open(self._path, 'rb') as f:

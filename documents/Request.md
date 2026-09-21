@@ -40,6 +40,12 @@ async def test(*, request: Request):
 
 ## **`self.ranges: list[tuple[int, int | None]]`**
 
+解析后的 `range` 请求头，闭区间表示；支持前缀区间、后缀区间与多区间：
+
+- `bytes=0-1023` → `[(0, 1023)]`
+- `bytes=-50` → `[(-50, None)]`，负起点表示末尾 50 字节
+- `bytes=0-` → `[(0, None)]`，终点开放时表示到文件末尾
+
 ## **`self.files: dict[str, File]`**
 
 上传的文件字典，key 为表单字段名，value 为 `File` 对象

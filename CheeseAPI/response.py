@@ -1,4 +1,4 @@
-import socket, asyncio, datetime, json, zlib, gzip, os, mimetypes, uuid, math
+import socket, asyncio, datetime, json, zlib, gzip, os, mimetypes, uuid
 from typing import TYPE_CHECKING, TypedDict, Literal, AsyncIterable
 
 import brotli, zstandard
@@ -127,7 +127,7 @@ class RedirectResponse(Response):
             headers = {}
         headers['location'] = location
 
-        super().__init__(status, body, headers)
+        super().__init__(body, status, headers)
 
 class FileResponse(Response):
     __slots__ = ('file', 'preview', 'transmission_type', 'chunked_size')
@@ -169,21 +169,34 @@ class ResponseProxy:
             status, headers, data = await anext(gen)
 
         bytes = [f'HTTP/1.1 {status} {HTTP_STATUS[status]}']
-        bytes.extend(f'{key}: {value}' for key, value in headers.items())
+        for key, value in headers.items():
+            if isinstance(value, list): # 某些响应头（如 set-cookie）需要写成多行
+                bytes.extend(f'{key}: {_value}' for _value in value)
+            else:
+                bytes.append(f'{key}: {value}')
         bytes.extend(['', ''])
         bytes = '\r\n'.join(bytes).encode()
         if not no_body:
-            if self.response.headers.get('transfer-encoding') == 'chunked':
-                bytes += hex(len(data)).encode() + b'\r\n' + data + b'\r\n'
+            if headers.get('transfer-encoding') == 'chunked':
+                bytes += f'{len(data):x}'.encode() + b'\r\n' + data + b'\r\n'
             else:
                 bytes += data
         await loop.sock_sendall(client_socket, bytes)
 
         if not no_body:
-            if self.response.headers.get('transfer-encoding') == 'chunked':
-                async for _, _, data in gen:
-                    await loop.sock_sendall(client_socket, hex(len(data)).encode() + b'\r\n' + data + b'\r\n')
-                await loop.sock_sendall(client_socket, b'0\r\n\r\n')
+            if headers.get('transfer-encoding') == 'chunked':
+                '''
+                分块传输：无论生成器是否抛异常，都必须补发 0 长度块结束分块流，
+                否则客户端会认为响应被截断
+                '''
+                try:
+                    async for _, _, data in gen:
+                        await loop.sock_sendall(client_socket, f'{len(data):x}'.encode() + b'\r\n' + data + b'\r\n')
+                finally:
+                    try:
+                        await loop.sock_sendall(client_socket, b'0\r\n\r\n')
+                    except Exception:
+                        ...
             elif self.request.ranges:
                 async for _, _, data in gen:
                     await loop.sock_sendall(client_socket, data)
@@ -192,19 +205,14 @@ class ResponseProxy:
             self.app.printer.response(self.request, self.response)
 
     async def get_status(self, status: int, headers: dict[str, str], body: dict | list | str | bytes | None) -> tuple[int, dict[str, str], dict | list | str | bytes | None]:
-        if isinstance(self.response, FileResponse):
-            if self.request.headers.get('range') is not None:
-                max_range = -1
-                for range in self.request.ranges:
-                    if range[1] is not None:
-                        max_range = max(max_range, range[1])
-                max_range += 1
-                if self.response.file._data is not None:
-                    if len(self.response.file.data) < max_range:
-                        status = 416
-                else:
-                    if os.path.getsize(self.response.file.path) < max_range:
-                        status = 416
+        if isinstance(self.response, FileResponse) and self.request.ranges:
+            max_range = -1
+            for range in self.request.ranges:
+                if range[1] is not None:
+                    max_range = max(max_range, range[1])
+            max_range += 1
+            size = len(self.response.file.data) if self.response.file._data is not None else os.path.getsize(self.response.file.path)
+            status = 416 if size < max_range else 206
 
         return status, headers, body
 
@@ -236,7 +244,7 @@ class ResponseProxy:
                 headers['content-type'] = f'{mime_type}; charset=utf-8'
                 headers['content-disposition'] = f'{"inline" if self.response.preview and mime_type in PREVIEWABLE_TYPES else "attachment"}; filename="{self.response.file.name}"'
 
-        if isinstance(self.response.body, AsyncIterable):
+        if isinstance(body, AsyncIterable):
             if 'transfer-encoding' not in headers:
                 headers['transfer-encoding'] = 'chunked'
 
@@ -265,6 +273,8 @@ class ResponseProxy:
                     else:
                         encoding_quality = True
                         encoding_split[1] = float(encoding_split[1].split('=')[1])
+                    if float(encoding_split[1]) <= 0: # q=0 表示该算法不可接受
+                        continue
                     encodings.append(encoding_split)
                 encodings.sort(key = lambda x: float(x[1]), reverse = True)
                 encodings = [encoding[0] for encoding in encodings]
@@ -304,51 +314,55 @@ class ResponseProxy:
                 if cookie['http_only']:
                     _cookie += '; HttpOnly'
                 cookies.append(_cookie)
-            headers['set-cookie'] = ', '.join(cookies)
+            headers['set-cookie'] = cookies # set-cookie 需要写成多行，此处保留列表，由 ResponseProxy.send 展开
 
         return status, headers, body
 
     async def get_body(self, status: int, headers: dict[str, str], body: dict | list | str | bytes | AsyncIterable | None) -> AsyncIterable[tuple[int, dict[str, str], bytes]]:
         if type(self.response) is FileResponse and self.request.ranges and status != 416:
-            if self.response.file._data is None:
+            if self.response.file._data is not None:
+                size = len(self.response.file.data)
+            else:
+                size = os.path.getsize(self.response.file.path)
                 handler = open(self.response.file.path, 'rb')
+
             if len(self.request.ranges) == 1:
+                start, end = self.request.ranges[0]
+                end = size - 1 if end is None else end # 区间为闭区间，末尾含在响应内
                 if self.response.file._data is not None:
-                    size = len(self.response.file.data)
-                    data = self.response.file.data[self.request.ranges[0][0] or 0:self.request.ranges[0][1] or len(self.response.file.data) + 1]
+                    data = self.response.file.data[start:end + 1]
                 else:
-                    size = os.path.getsize(self.response.file.path)
-                    handler.seek(self.request.ranges[0][0] or 0)
-                    data = handler.read((self.request.ranges[0][1] or size) - (self.request.ranges[0][0]))
+                    handler.seek(start)
+                    data = handler.read(end + 1 - start)
                     handler.close()
+
                 headers['content-length'] = str(len(data))
-                headers['content-range'] = f'bytes {self.request.ranges[0][0]}-{(self.request.ranges[0][1] or size) - 1}/{size}'
+                headers['content-range'] = f'bytes {start}-{end}/{size}'
                 yield status, headers, data
             else:
                 boundary = uuid.uuid4().hex
                 content_type = headers['content-type']
                 headers['content-type'] = f'multipart/byteranges; boundary={boundary}'
-                if self.response.file._data is not None:
-                    size = len(self.response.file.data)
-                else:
-                    size = os.path.getsize(self.response.file.path)
 
-                content_length = 0
-                for range in self.request.ranges:
-                    content_length += 2 + 32 + 2 + 14 + len(content_type) + 2 + 21 + (1 if range[0] == 0 else int(math.log10(range[0]))) + 1 + 1 + int(math.log10(range[1] or size)) + 1 + 1 + int(math.log10(size)) + 1 + 4 + (range[1] or size) - range[0] + 1
-                headers['content-length'] = str(content_length)
-
-                for range in self.request.ranges:
-                    data = [b'--', boundary.encode(), b'\r\n', b'content-type: ', content_type.encode(), b'\r\n', b'content-range: bytes ', str(range[0]).encode(), b'-', str(range[1] or size).encode(), b'/', str(size).encode() + b'\r\n\r\n']
+                parts = []
+                for start, end in self.request.ranges:
+                    end = size - 1 if end is None else end
                     if self.response.file._data is not None:
-                        data.append(self.response.file.data[range[0]:range[1] or size + 1])
+                        data = self.response.file.data[start:end + 1]
                     else:
-                        handler.seek(range[0])
-                        data.append(handler.read((range[1] or size) - (range[0])))
-                    yield status, headers, b''.join(data)
+                        handler.seek(start)
+                        data = handler.read(end + 1 - start)
+                    parts.append(b''.join([b'--', boundary.encode(), b'\r\n', b'content-type: ', content_type.encode(), b'\r\n', b'content-range: bytes ', str(start).encode(), b'-', str(end).encode(), b'/', str(size).encode(), b'\r\n\r\n', data]))
+
                 if self.response.file._data is None:
                     handler.close()
-                yield status, headers, b'--' + boundary.encode() + b'--'
+
+                trailer = b'--' + boundary.encode() + b'--'
+                headers['content-length'] = str(sum(len(part) for part in parts) + len(trailer))
+
+                for part in parts:
+                    yield status, headers, part
+                yield status, headers, trailer
         else:
             if isinstance(body, AsyncIterable):
                 data = await anext(body)
@@ -386,11 +400,11 @@ class ResponseProxy:
 
     async def get_encode_body(self, status: int, headers: dict[str, str], body: bytes) -> tuple[int, dict[str, str], bytes]:
         content_length = headers.get('content-length')
-        if content_length and int(content_length) < self.app.compress_min_length:
+        if self.response.compress is None and content_length and int(content_length) < self.app.compress_min_length:
             if 'content-encoding' in headers:
                 del headers['content-encoding']
 
-        if 'content-encoding' in headers and 'content-length' in headers and (int(headers['content-length']) > self.app.compress_min_length or self.response.compress is not None):
+        if 'content-encoding' in headers and 'content-length' in headers and (self.response.compress is not None or int(headers['content-length']) >= self.app.compress_min_length):
             compress_level = self.response.compress_level if self.response.compress_level is not None else self.app.compress_level
             if headers['content-encoding'] == 'gzip':
                 body = gzip.compress(body, compress_level)
