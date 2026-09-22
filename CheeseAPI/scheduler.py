@@ -27,7 +27,7 @@ class Task:
             setattr(instance, key, value)
 
         if '_running_remote' not in data:
-            instance._running_remote = not data.get('_queue', True) # 旧数据只有 `_queue`（非空代表未运行）
+            instance._running_remote = False # 无法判断运行状态的旧数据按未运行处理，避免残留记录阻塞重启
 
         setattr(instance, '_scheduler_proxy', _scheduler_proxy)
         return instance
@@ -77,7 +77,7 @@ class Task:
         self._stop_event = threading.Event()
         ''' 线程 / 协程任务的停止信号（同进程内使用） '''
         self._running_remote: bool = False
-        ''' 任务是否运行在其它进程（由 `sync_server` 反序列化而来的任务） '''
+        ''' 任务的运行状态（写入共享存储，其它进程据此判断同名任务是否已被占用） '''
 
     '''
     停止信号的收发
@@ -154,7 +154,7 @@ class Task:
         data['_queue'] = None
         data['_stop_event'] = None
         data['_handler'] = None
-        data['_running_remote'] = self.is_running
+        data['_running_remote'] = self._running_remote
         data['first_run_timer'] = self.first_run_timer.timestamp() if self.first_run_timer else None
         data['_last_run_timer'] = self._last_run_timer.timestamp() if self._last_run_timer else None
         data['fn'] = None
@@ -388,7 +388,7 @@ class SchedulerProxy:
 
             task = Task(fn, interval_time, first_run_timer = first_run_timer, expected_run_num = expected_run_num, key = key, run_type = run_type, args = args, kwargs = kwargs, auto_remove = auto_remove, timeout = timeout, _scheduler_proxy = self)
 
-            if self.has_task(task.key):
+            if not self._can_add(task.key):
                 raise KeyError(f'Task with key "{task.key}" already exists')
 
             self._tasks[task.key] = task
@@ -416,7 +416,7 @@ class SchedulerProxy:
 
             task = Task(fn, interval_time = interval_time, first_run_timer = first_run_timer, expected_run_num = expected_run_num, key = key, run_type = 'ASYNC', args = args, kwargs = kwargs, auto_remove = auto_remove, timeout = timeout, _scheduler_proxy = self)
 
-            if await self.async_has_task(task.key):
+            if not await self._async_can_add(task.key):
                 raise KeyError(f'Task with key "{task.key}" already exists')
 
             self._tasks[task.key] = task
@@ -471,6 +471,8 @@ class SchedulerProxy:
         if static.scheduler_sync_servers:
             _redis = redis.Redis(connection_pool = static.scheduler_sync_servers[0])
             if _redis.hexists('CheeseAPI_scheduler_tasks', task.key):
+                task._running_remote = False # 任务已结束，清除共享存储里的运行状态，使重启后的同名任务可以注册
+                _redis.hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
                 _redis.hpersist('CheeseAPI_scheduler_tasks', task.key)
 
         if task.run_type == 'PROCESS':
@@ -524,8 +526,10 @@ class SchedulerProxy:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)
         else:
             if static.scheduler_sync_servers:
+                task._running_remote = False # 任务已结束，清除共享存储里的运行状态
                 _redis = redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1])
                 if await _redis.hexists('CheeseAPI_scheduler_tasks', key):
+                    await _redis.hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
                     await _redis.hpersist('CheeseAPI_scheduler_tasks', key)
 
     def join(self, task: Task):
@@ -556,7 +560,11 @@ class SchedulerProxy:
         elif task.run_type == 'PROCESS':
             task._ensure_queue() # 队列必须在 `spawn` 之前创建，子进程才能拿到同一个队列
             task._handler = multiprocessing.get_context('spawn').Process(target = self.task_processing, args = (task, task.fn, *task.args), kwargs = task.kwargs, daemon = True)
+        task._running_remote = True # 必须先置位：进程任务在 `start` 时就（通过 pickle）把状态传给子进程
         task._handler.start()
+
+        if static.scheduler_sync_servers:
+            redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
 
         if task.auto_remove:
             threading.Thread(target = self.join, args = (task,), daemon = True).start()
@@ -574,6 +582,9 @@ class SchedulerProxy:
         else:
             task._reset_stop()
             task._handler = asyncio.create_task(self.async_task_processing(key, task.fn, *task.args, **task.kwargs))
+            task._running_remote = True
+            if static.scheduler_sync_servers:
+                await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
 
     def stop(self, key: str):
         task = self.get_task(key)
@@ -588,8 +599,9 @@ class SchedulerProxy:
                 redis.Redis(connection_pool = static.scheduler_sync_servers[0]).publish('CheeseAPI_scheduler', json.dumps(['stop', key]))
         else:
             local_task._stop()
+            local_task._running_remote = False
             if static.scheduler_sync_servers:
-                redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+                redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(local_task._to_dict()))
 
         time.sleep(self.app.sync_server_timeout)
 
@@ -622,8 +634,9 @@ class SchedulerProxy:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).publish('CheeseAPI_scheduler', json.dumps(['stop', key]))
         else:
             local_task._stop()
+            local_task._running_remote = False
             if static.scheduler_sync_servers:
-                await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+                await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(local_task._to_dict()))
 
     async def async_remove(self, key: str):
         task = await self.async_get_task(key)
@@ -641,21 +654,29 @@ class SchedulerProxy:
             if static.scheduler_sync_servers:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)
 
-    def has_task(self, key: str) -> bool:
-        ''' 任务是否存在（直接查存储，不反序列化任务） '''
+    def _can_add(self, key: str) -> bool:
+        '''
+        该 key 是否可以注册任务
 
-        if static.scheduler_sync_servers is not None:
-            return bool(redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hexists('CheeseAPI_scheduler_tasks', key))
+        未使用 sync_server 时任务只存在于本进程，重复注册一律报错；
+        使用 sync_server 时任务记录跨进程共享：同名任务正在运行时报错，
+        只剩上次运行退出后残留的记录（未在运行）则允许接管，否则进程重启后无法再注册自己的任务。
+        '''
 
-        return key in self._tasks
+        if static.scheduler_sync_servers is None:
+            return key not in self._tasks
 
-    async def async_has_task(self, key: str) -> bool:
-        ''' 任务是否存在（直接查存储，不反序列化任务） '''
+        task = self.get_task(key)
+        return task is None or not task.is_running
 
-        if static.scheduler_sync_servers is not None:
-            return bool(await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hexists('CheeseAPI_scheduler_tasks', key))
+    async def _async_can_add(self, key: str) -> bool:
+        ''' 见 `_can_add` '''
 
-        return key in self._tasks
+        if static.scheduler_sync_servers is None:
+            return key not in self._tasks
+
+        task = await self.async_get_task(key)
+        return task is None or not task.is_running
 
     def get_task(self, key: str) -> Task | None:
         if static.scheduler_sync_servers is not None:
