@@ -17,7 +17,7 @@ class Task:
 
         for key, value in data.items():
             if key == '_queue':
-                value = multiprocessing.get_context('spawn').Queue()
+                value = None # 队列按需创建（见 `_ensure_queue`），反序列化时不占用文件描述符
             elif key == '_stop_event':
                 value = threading.Event()
             elif key == 'first_run_timer':
@@ -72,8 +72,8 @@ class Task:
         self._run_num: int = 0
         self._handler: threading.Thread | multiprocessing.Process | asyncio.Task | None = None
 
-        self._queue = multiprocessing.get_context('spawn').Queue()
-        ''' 进程任务的停止信号队列（父进程放入、子进程取出） '''
+        self._queue = None
+        ''' 进程任务的停止信号队列（父进程放入、子进程取出），按需创建（见 `_ensure_queue`） '''
         self._stop_event = threading.Event()
         ''' 线程 / 协程任务的停止信号（同进程内使用） '''
         self._running_remote: bool = False
@@ -86,11 +86,36 @@ class Task:
     线程 / 协程任务用 `threading.Event`，进程任务用队列的 `empty()` / `get_nowait()` 判断与取出信号。
     '''
 
+    def _ensure_queue(self):
+        '''
+        进程任务的停止信号队列，按需创建
+
+        线程 / 协程任务用 `threading.Event` 传递停止信号，不需要队列；每个队列都会占用若干文件描述符，
+        无条件创建会在大量短生命周期任务（如每条 websocket 连接一个心跳任务）下耗尽文件描述符。
+        '''
+
+        if self._queue is None:
+            self._queue = multiprocessing.get_context('spawn').Queue()
+        return self._queue
+
+    def _close_queue(self):
+        ''' 释放停止信号队列占用的文件描述符（任务移除后调用） '''
+
+        queue, self._queue = self._queue, None
+        if queue is None:
+            return
+
+        try:
+            queue.close()
+            queue.join_thread()
+        except (OSError, ValueError):
+            ...
+
     def _stop(self):
         ''' 发送停止信号 '''
 
         if self.run_type == 'PROCESS':
-            self._queue.put(None)
+            self._ensure_queue().put(None)
         else:
             self._stop_event.set()
 
@@ -98,9 +123,10 @@ class Task:
         ''' 清除停止信号（启动任务前调用） '''
 
         if self.run_type == 'PROCESS':
+            queue = self._ensure_queue()
             while True:
                 try:
-                    self._queue.get_nowait()
+                    queue.get_nowait()
                 except Empty:
                     break
         else:
@@ -110,7 +136,7 @@ class Task:
         ''' 是否收到了停止信号 '''
 
         if self.run_type == 'PROCESS':
-            return not self._queue.empty()
+            return not self._ensure_queue().empty()
         return self._stop_event.is_set()
 
     def __getstate__(self) -> tuple[None, dict[str, any]]:
@@ -362,7 +388,7 @@ class SchedulerProxy:
 
             task = Task(fn, interval_time, first_run_timer = first_run_timer, expected_run_num = expected_run_num, key = key, run_type = run_type, args = args, kwargs = kwargs, auto_remove = auto_remove, timeout = timeout, _scheduler_proxy = self)
 
-            if task.key in self.get_tasks():
+            if self.has_task(task.key):
                 raise KeyError(f'Task with key "{task.key}" already exists')
 
             self._tasks[task.key] = task
@@ -390,7 +416,7 @@ class SchedulerProxy:
 
             task = Task(fn, interval_time = interval_time, first_run_timer = first_run_timer, expected_run_num = expected_run_num, key = key, run_type = 'ASYNC', args = args, kwargs = kwargs, auto_remove = auto_remove, timeout = timeout, _scheduler_proxy = self)
 
-            if task.key in await self.async_get_tasks():
+            if await self.async_has_task(task.key):
                 raise KeyError(f'Task with key "{task.key}" already exists')
 
             self._tasks[task.key] = task
@@ -451,7 +477,11 @@ class SchedulerProxy:
             task._reset_stop() # 取出残留的停止信号，保证下次启动时队列是干净的
 
     async def async_task_processing(self, key: str, fn, *args, **kwargs):
-        task = await self.async_get_task(key)
+        task = self._tasks.get(key)
+        if task is None:
+            task = await self.async_get_task(key)
+        if task is None:
+            return
 
         if task.first_run_timer:
             await asyncio.sleep(max(0, task.first_run_timer.timestamp() - time.time()))
@@ -487,7 +517,9 @@ class SchedulerProxy:
             await asyncio.sleep(max(0, task.interval_time - time.time() + now))
 
         if task.auto_remove:
-            self._tasks.pop(key, None)
+            local_task = self._tasks.pop(key, None)
+            if local_task is not None:
+                local_task._close_queue()
             if static.scheduler_sync_servers is not None:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)
         else:
@@ -502,6 +534,7 @@ class SchedulerProxy:
         elif task.run_type == 'PROCESS' and isinstance(task._handler, multiprocessing.Process):
             task._handler.join()
         self._tasks.pop(task.key, None)
+        task._close_queue()
         if static.scheduler_sync_servers:
             redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hdel('CheeseAPI_scheduler_tasks', task.key)
 
@@ -521,6 +554,7 @@ class SchedulerProxy:
         if task.run_type == 'THREAD':
             task._handler = threading.Thread(target = self.task_processing, args = (task, task.fn, *task.args), kwargs = task.kwargs, daemon = True)
         elif task.run_type == 'PROCESS':
+            task._ensure_queue() # 队列必须在 `spawn` 之前创建，子进程才能拿到同一个队列
             task._handler = multiprocessing.get_context('spawn').Process(target = self.task_processing, args = (task, task.fn, *task.args), kwargs = task.kwargs, daemon = True)
         task._handler.start()
 
@@ -571,6 +605,7 @@ class SchedulerProxy:
         else:
             local_task._stop()
             self._tasks.pop(key, None)
+            local_task._close_queue()
             if static.scheduler_sync_servers:
                 redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hdel('CheeseAPI_scheduler_tasks', key)
 
@@ -602,8 +637,25 @@ class SchedulerProxy:
         else:
             local_task._stop()
             self._tasks.pop(key, None)
+            local_task._close_queue()
             if static.scheduler_sync_servers:
                 await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hdel('CheeseAPI_scheduler_tasks', key)
+
+    def has_task(self, key: str) -> bool:
+        ''' 任务是否存在（直接查存储，不反序列化任务） '''
+
+        if static.scheduler_sync_servers is not None:
+            return bool(redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hexists('CheeseAPI_scheduler_tasks', key))
+
+        return key in self._tasks
+
+    async def async_has_task(self, key: str) -> bool:
+        ''' 任务是否存在（直接查存储，不反序列化任务） '''
+
+        if static.scheduler_sync_servers is not None:
+            return bool(await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hexists('CheeseAPI_scheduler_tasks', key))
+
+        return key in self._tasks
 
     def get_task(self, key: str) -> Task | None:
         if static.scheduler_sync_servers is not None:

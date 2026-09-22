@@ -241,6 +241,35 @@ async def task_remove(*, request, **_):
 
     return Response('removed')
 
+def count_file_descriptors() -> int:
+    ''' 当前进程打开的文件描述符数量 '''
+
+    return len(os.listdir('/dev/fd'))
+
+@app.route.get('/fd/churn')
+async def fd_churn(*, request, **_):
+    '''
+    注册大量短生命周期任务（模拟每条 websocket 连接一个心跳任务），返回各阶段的文件描述符数量
+
+    队列会占用若干文件描述符，协程任务不应创建队列。
+    '''
+
+    times = int(request.query.get('times', '200'))
+    keys = [f'fd-churn-{i}' for i in range(times)]
+
+    before = count_file_descriptors()
+    for key in keys:
+        await app.scheduler.async_add(5.0, async_task, key = key)
+    peak = count_file_descriptors()
+    for key in keys:
+        await app.scheduler.async_remove(key = key)
+
+    return Response({
+        'before': before,
+        'peak': peak,
+        'after': count_file_descriptors()
+    })
+
 @app.route.get('/task/get')
 async def task_get(*, request, **_):
     ''' 用 `get_task` 取单个任务，验证显式 key 与自动生成的 key '''

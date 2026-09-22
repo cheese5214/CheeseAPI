@@ -218,6 +218,16 @@ def case_timeout(t, server):
 
     query(server, '/task/remove?key=timeout-task')
 
+def case_file_descriptor(t, server):
+    ''' 大量短生命周期任务（如每条 websocket 连接一个心跳任务）不应占用 / 泄漏文件描述符 '''
+
+    status, body = query(server, '/fd/churn?times=200')
+    t.check('文件描述符：fd 检查接口可用', status == 200, f'status={status}, body={body!r}')
+
+    data = json.loads(body)
+    t.check('文件描述符：注册 200 个协程任务的增量受控（协程任务不创建队列）', data['peak'] - data['before'] <= 20, f'{data}')
+    t.check('文件描述符：移除任务后回到注册前的水平', data['after'] - data['before'] <= 20, f'{data}')
+
 CASES = [
     ('任务注册（函数调用写法 / 显式 key）', case_register),
     ('自动生成的 key', case_auto_key),
@@ -227,5 +237,6 @@ CASES = [
     ('expected_run_num 与 auto_remove（线程任务）', case_expected_run_num_thread),
     ('装饰器写法', case_decorator),
     ('start / stop / remove', case_start_stop_remove),
-    ('timeout', case_timeout)
+    ('timeout', case_timeout),
+    ('文件描述符占用', case_file_descriptor)
 ]
