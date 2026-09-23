@@ -76,8 +76,18 @@ if __name__ == '__main__':
 | `file.py` | `File` 的构造、属性与 `save()` |
 | `signal_hooks.py` | 生命周期信号与请求周期信号的触发与顺序 |
 | `scheduler.py` | 定时任务的增删启停、执行方式、次数与超时 |
+| `scheduler_sync_server.py` | **独立脚本**（不进 `run.py`）：sync_server 下的共享任务记录语义，连本机 redis 的 **db 9** |
 | `websocket.py` | 回声、同步静态发送投递、异常断连清理、协程泄漏 |
 | `app_config.py` | 应用级配置：全局压缩、`logger_path`、keep-alive、`request_timeout` 等 |
+
+## 独立脚本
+
+| 脚本 | 运行方式 | 覆盖 |
+|------|----------|------|
+| `scheduler_sync_server.py` | `python tests/scheduler_sync_server.py` | 死进程残留记录接管（旧格式 / `SIGKILL`）、存活属主去重、无 sync_server 时的去重、记录 TTL、优雅停机 |
+
+它不进 `run.py`：需要本机 redis，且要 fork 出会常驻的子进程，与「起一个 HTTP 服务、跑完关掉」的用例模型不同。
+固定用 **db 9**，脚本开头会 `flushdb`，不会污染部署库；可用 `CHEESE_TEST_REDIS` 覆盖连接地址。
 
 ## 三处刻意的设计
 
@@ -102,4 +112,4 @@ if __name__ == '__main__':
 - 修好之后 → 变成 `FAIL`，提示把该用例转成正式断言 `check`
 
 **当前 0 项**：原先记录的 40 项已知缺陷已全部修复，对应用例都已转成正式断言 `check`，
-全量运行是 `504/504 passed，0 FAIL`。`known_issue` 接口保留，供后续新增未修缺陷时使用。
+全量运行是 `507/507 passed，0 FAIL`。`known_issue` 接口保留，供后续新增未修缺陷时使用。

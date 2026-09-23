@@ -1,6 +1,14 @@
 # **Scheduler**
 
-任务调度数据不在分布式环境下共享，若要在分布式环境下管理任务调度，请自行实现功能
+默认任务只存在于本进程；配置 `app.sync_server_url` 后，任务记录通过同步服务器（redis）跨进程共享，
+写在 hash `CheeseAPI_scheduler_tasks`，同名任务只允许由一个进程注册，由**存活进程**运行时其它进程重复注册会报错。
+
+每条任务记录都带 TTL（任务的 `timeout`）：进程若在任务跑完前退出，残留记录不会永久阻塞重启。
+运行中的记录还带属主进程的实例 id（`_instance`），并对应一个短 TTL 的存活标记
+`CheeseAPI_scheduler_instance:<instance>`（TTL 取 `app.sync_server_timeout`，由守护线程按它的一半周期续期）；
+标记过期（进程崩溃 / 被杀）或记录本就没有 `_instance`（旧数据）
+即视为死进程残留，允许新进程接管该 key，接管耗时以 `app.sync_server_timeout` 为上限，无需等到 `interval_time * 2`。
+进程正常停机时会主动把本进程的任务标记为非运行并清除存活标记。
 
 ```python
 from CheeseAPI import CheeseAPI, Websocket, Response

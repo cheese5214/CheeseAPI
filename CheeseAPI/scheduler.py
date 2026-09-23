@@ -10,6 +10,11 @@ from CheeseAPI import static
 if TYPE_CHECKING:
     from CheeseAPI import CheeseAPI
 
+def _timeout_ms(task: 'Task') -> int:
+    ''' 任务记录的 TTL（毫秒）：`timeout` 秒转换为毫秒，至少 1 毫秒（`0` 会让 `hpexpire` 直接删除记录） '''
+
+    return max(1, int(task.timeout * 1000))
+
 class Task:
     @classmethod
     def from_dict(cls, data: dict[str, any], _scheduler_proxy) -> 'Task':
@@ -28,11 +33,13 @@ class Task:
 
         if '_running_remote' not in data:
             instance._running_remote = False # 无法判断运行状态的旧数据按未运行处理，避免残留记录阻塞重启
+        if '_instance' not in data:
+            instance._instance = None # 没有实例 id 的旧数据视为无属主：按死进程残留处理，允许接管
 
         setattr(instance, '_scheduler_proxy', _scheduler_proxy)
         return instance
 
-    __slots__ = ('fn', 'interval_time', 'first_run_timer', 'expected_run_num', '_key', 'run_type', 'args', 'kwargs', 'auto_remove', '_last_run_timer', '_last_run_time', '_run_num', '_handler', '_queue', '_stop_event', '_running_remote', '_scheduler_proxy', 'timeout')
+    __slots__ = ('fn', 'interval_time', 'first_run_timer', 'expected_run_num', '_key', 'run_type', 'args', 'kwargs', 'auto_remove', '_last_run_timer', '_last_run_time', '_run_num', '_handler', '_queue', '_stop_event', '_running_remote', '_instance', '_scheduler_proxy', 'timeout')
 
     def __init__(self, fn: Callable, interval_time: float, *, first_run_timer: datetime.datetime | float | None = None, expected_run_num: int | None = None, key: str | None = None, run_type: Literal['THREAD', 'PROCESS', 'ASYNC'] = 'THREAD', args: tuple = (), kwargs: dict = {}, auto_remove: bool = False, timeout: float | None = None, _scheduler_proxy: 'SchedulerProxy'):
         '''
@@ -78,6 +85,8 @@ class Task:
         ''' 线程 / 协程任务的停止信号（同进程内使用） '''
         self._running_remote: bool = False
         ''' 任务的运行状态（写入共享存储，其它进程据此判断同名任务是否已被占用） '''
+        self._instance: str | None = None
+        ''' 占用该任务的进程实例 id（由 `SchedulerProxy` 在注册时写入，用于判断属主进程是否已死） '''
 
     '''
     停止信号的收发
@@ -295,6 +304,13 @@ class Scheduler:
 
         return self._proxy.get_task(key)
 
+    def _shutdown(self):
+        ''' 停机清理，见 `SchedulerProxy._shutdown`；自定义 SchedulerProxy 未实现时跳过（实例存活标记的 TTL 仍能兜底） '''
+
+        shutdown = getattr(self._proxy, '_shutdown', None)
+        if shutdown is not None:
+            shutdown()
+
     async def async_get_task(self, key: str) -> Task | None:
         ''' 获取任务 '''
 
@@ -305,13 +321,17 @@ class Scheduler:
         return self._proxy.get_tasks()
 
 class SchedulerProxy:
-    __slots__ = ('app', '_tasks', '_pubsub_ready')
+    __slots__ = ('app', '_tasks', '_pubsub_ready', '_instance', '_instance_ready')
 
     def __init__(self, app: 'CheeseAPI'):
         self.app: 'CheeseAPI' = app
 
         self._tasks: dict[str, Task] = {}
         self._pubsub_ready: bool = False
+        self._instance: str = str(uuid.uuid4())
+        ''' 本进程实例 id，写进任务记录，供其它进程判断任务属主是否还在运行 '''
+        self._instance_ready: bool = False
+        ''' 本进程的实例存活标记是否已建立 '''
 
     def __getstate__(self):
         return None, {
@@ -322,6 +342,112 @@ class SchedulerProxy:
         self.app = state[1]['app']
         self._tasks = {}
         self._pubsub_ready = False
+        self._instance = str(uuid.uuid4()) # 工作进程是独立的进程，实例 id 必须重新生成
+        self._instance_ready = False
+
+    @staticmethod
+    def _instance_key(instance: str) -> str:
+        ''' 实例存活标记的 redis key '''
+
+        return f'CheeseAPI_scheduler_instance:{instance}'
+
+    def _instance_ttl(self) -> int:
+        '''
+        实例存活标记的存活时长（秒）
+
+        取 `sync_server_timeout` 量级：太长会让死进程的残留记录迟迟不能接管，
+        太短会在刷新线程偶发延迟时把活进程误判为死进程。
+        '''
+
+        return max(1, int(self.app.sync_server_timeout))
+
+    def _instance_alive(self, instance: str | None) -> bool:
+        '''
+        指定实例（进程）是否还活着
+
+        无 `_instance`（旧记录）或存活标记已过期都视为属主已不存在；读取出错时保守判定为存活，避免误接管正在运行的任务。
+        '''
+
+        if not instance or static.scheduler_sync_servers is None:
+            return False
+
+        try:
+            return bool(redis.Redis(connection_pool = static.scheduler_sync_servers[0]).exists(self._instance_key(instance)))
+        except redis.exceptions.RedisError:
+            return True
+
+    async def _async_instance_alive(self, instance: str | None) -> bool:
+        ''' 见 `_instance_alive` '''
+
+        if not instance or static.scheduler_sync_servers is None:
+            return False
+
+        try:
+            return bool(await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).exists(self._instance_key(instance)))
+        except redis.exceptions.RedisError:
+            return True
+
+    def _ensure_instance_ready(self):
+        '''
+        保证本进程的实例存活标记存在，并启动刷新线程
+
+        标记必须在本进程写入任何「运行中」的任务记录之前就位，否则同名任务会被其它进程当作死进程残留接管。
+        '''
+
+        if self._instance_ready or static.scheduler_sync_servers is None:
+            return
+
+        self._instance_ready = True
+        try:
+            redis.Redis(connection_pool = static.scheduler_sync_servers[0]).setex(self._instance_key(self._instance), self._instance_ttl(), '1')
+        except redis.exceptions.RedisError:
+            ...
+
+        threading.Thread(target = self._instance_running, args = (self.app,), daemon = True).start()
+
+    def _instance_running(self, app: 'CheeseAPI'):
+        ''' 守护线程：按 `sync_server_timeout` 的一半为周期刷新实例存活标记 '''
+
+        try:
+            while True:
+                time.sleep(max(0.5, app.sync_server_timeout / 2))
+                try:
+                    redis.Redis(connection_pool = static.scheduler_sync_servers[0]).setex(self._instance_key(self._instance), self._instance_ttl(), '1')
+                except redis.exceptions.RedisError:
+                    continue
+        except (KeyboardInterrupt, SystemExit):
+            ...
+
+    def _shutdown(self):
+        '''
+        优雅停机：把本进程正在运行的任务标记为非运行，并删除本进程的实例存活标记
+
+        `SIGKILL` 等无法捕获的退出只能靠实例存活标记兜底（标记过期后即可接管），所以这里不是唯一防线。
+        '''
+
+        if static.scheduler_sync_servers is None:
+            return
+
+        try:
+            _redis = redis.Redis(connection_pool = static.scheduler_sync_servers[0])
+        except redis.exceptions.RedisError:
+            return
+
+        for task in list(self._tasks.values()):
+            if not task._running_remote:
+                continue
+
+            task._running_remote = False
+            try:
+                _redis.hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
+                _redis.hpersist('CheeseAPI_scheduler_tasks', task.key)
+            except redis.exceptions.RedisError:
+                ...
+
+        try:
+            _redis.delete(self._instance_key(self._instance))
+        except redis.exceptions.RedisError:
+            ...
 
     def _start_pubsub(self, app: 'CheeseAPI'):
         try:
@@ -392,8 +518,12 @@ class SchedulerProxy:
                 raise KeyError(f'Task with key "{task.key}" already exists')
 
             self._tasks[task.key] = task
+            task._instance = self._instance
+            self._ensure_instance_ready()
             if static.scheduler_sync_servers:
-                redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
+                _redis = redis.Redis(connection_pool = static.scheduler_sync_servers[0])
+                _redis.hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
+                _redis.hpexpire('CheeseAPI_scheduler_tasks', _timeout_ms(task), task.key)
 
             return task
         else:
@@ -420,8 +550,12 @@ class SchedulerProxy:
                 raise KeyError(f'Task with key "{task.key}" already exists')
 
             self._tasks[task.key] = task
+            task._instance = self._instance
+            self._ensure_instance_ready()
             if static.scheduler_sync_servers:
-                await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
+                _redis = redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1])
+                await _redis.hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
+                await _redis.hpexpire('CheeseAPI_scheduler_tasks', _timeout_ms(task), task.key)
 
             return task
         else:
@@ -563,8 +697,12 @@ class SchedulerProxy:
         task._running_remote = True # 必须先置位：进程任务在 `start` 时就（通过 pickle）把状态传给子进程
         task._handler.start()
 
+        task._instance = self._instance
+        self._ensure_instance_ready()
         if static.scheduler_sync_servers:
-            redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
+            _redis = redis.Redis(connection_pool = static.scheduler_sync_servers[0])
+            _redis.hset('CheeseAPI_scheduler_tasks', task.key, json.dumps(task._to_dict()))
+            _redis.hpexpire('CheeseAPI_scheduler_tasks', _timeout_ms(task), task.key)
 
         if task.auto_remove:
             threading.Thread(target = self.join, args = (task,), daemon = True).start()
@@ -583,8 +721,12 @@ class SchedulerProxy:
             task._reset_stop()
             task._handler = asyncio.create_task(self.async_task_processing(key, task.fn, *task.args, **task.kwargs))
             task._running_remote = True
+            task._instance = self._instance
+            self._ensure_instance_ready()
             if static.scheduler_sync_servers:
-                await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+                _redis = redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1])
+                await _redis.hset('CheeseAPI_scheduler_tasks', key, json.dumps(task._to_dict()))
+                await _redis.hpexpire('CheeseAPI_scheduler_tasks', _timeout_ms(task), key)
 
     def stop(self, key: str):
         task = self.get_task(key)
@@ -601,7 +743,9 @@ class SchedulerProxy:
             local_task._stop()
             local_task._running_remote = False
             if static.scheduler_sync_servers:
-                redis.Redis(connection_pool = static.scheduler_sync_servers[0]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(local_task._to_dict()))
+                _redis = redis.Redis(connection_pool = static.scheduler_sync_servers[0])
+                _redis.hset('CheeseAPI_scheduler_tasks', key, json.dumps(local_task._to_dict()))
+                _redis.hpexpire('CheeseAPI_scheduler_tasks', _timeout_ms(local_task), key)
 
         time.sleep(self.app.sync_server_timeout)
 
@@ -636,7 +780,9 @@ class SchedulerProxy:
             local_task._stop()
             local_task._running_remote = False
             if static.scheduler_sync_servers:
-                await redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1]).hset('CheeseAPI_scheduler_tasks', key, json.dumps(local_task._to_dict()))
+                _redis = redis.asyncio.Redis(connection_pool = static.scheduler_sync_servers[1])
+                await _redis.hset('CheeseAPI_scheduler_tasks', key, json.dumps(local_task._to_dict()))
+                await _redis.hpexpire('CheeseAPI_scheduler_tasks', _timeout_ms(local_task), key)
 
     async def async_remove(self, key: str):
         task = await self.async_get_task(key)
@@ -659,15 +805,19 @@ class SchedulerProxy:
         该 key 是否可以注册任务
 
         未使用 sync_server 时任务只存在于本进程，重复注册一律报错；
-        使用 sync_server 时任务记录跨进程共享：同名任务正在运行时报错，
-        只剩上次运行退出后残留的记录（未在运行）则允许接管，否则进程重启后无法再注册自己的任务。
+        使用 sync_server 时任务记录跨进程共享：同名任务由存活进程运行时报错，
+        记录虽为「运行中」但属主进程已不存在（崩溃 / 被杀后的残留），
+        或只剩上次运行退出后残留的记录（未在运行）则允许接管，否则进程重启后无法再注册自己的任务。
         '''
 
         if static.scheduler_sync_servers is None:
             return key not in self._tasks
 
         task = self.get_task(key)
-        return task is None or not task.is_running
+        if task is None or not task.is_running:
+            return True
+
+        return not self._instance_alive(task._instance)
 
     async def _async_can_add(self, key: str) -> bool:
         ''' 见 `_can_add` '''
@@ -676,7 +826,10 @@ class SchedulerProxy:
             return key not in self._tasks
 
         task = await self.async_get_task(key)
-        return task is None or not task.is_running
+        if task is None or not task.is_running:
+            return True
+
+        return not await self._async_instance_alive(task._instance)
 
     def get_task(self, key: str) -> Task | None:
         if static.scheduler_sync_servers is not None:

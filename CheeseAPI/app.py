@@ -61,6 +61,7 @@ class AppProxy:
 
         self.before_app_stop()
         self.app.signal.before_app_stop.send()
+        self.app.scheduler._shutdown() # 把本进程正在运行的任务标记为非运行，避免残留记录阻塞下次启动
 
         if waiting_list:
             try:
